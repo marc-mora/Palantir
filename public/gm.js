@@ -35,6 +35,9 @@
   let selectNew = false;
   let syncInit = false;
   let camTimer = null;
+  let exploredRaw = null; // memoria de lo explorado tal como la envía el servidor
+  let memoryCache = { key: null, mask: null };
+  let scenesSeen = false;
 
   const HINTS = {
     select: 'Arrastra una ficha para moverla · clic en una puerta para abrirla o cerrarla · arrastra el fondo para mover el mapa · rueda para zoom',
@@ -58,9 +61,27 @@
         return;
       }
       if (m.t !== 'state') return;
-      const known = S ? new Set(S.tokens.map((t) => t.id)) : null;
+      const sameScene = S && S.sceneId === m.sceneId;
+      const known = sameScene ? new Set(S.tokens.map((t) => t.id)) : null;
+      // Los muros y lo explorado solo llegan cuando cambian.
+      if (m.walls) m.segs = Vision.blocking(m.walls);
+      else {
+        m.walls = sameScene ? S.walls : [];
+        m.segs = sameScene ? S.segs : [];
+      }
+      if (m.explored !== undefined) {
+        exploredRaw = m.explored;
+        memoryCache = { key: null, mask: null };
+      }
+      if (S && !sameScene) {
+        // Se ha abierto otra escena.
+        anim.reset();
+        sel = null;
+        draft = null;
+        preview = 'gm';
+        fittedFor = undefined;
+      }
       S = m;
-      S.segs = Vision.blocking(S.walls);
       anim.update(S.tokens);
       if (selectNew && known) {
         const fresh = S.tokens.find((t) => !known.has(t.id));
@@ -68,10 +89,16 @@
         selectNew = false;
       }
       if (sel && !S.tokens.some((t) => t.id === sel)) sel = null;
-      if (fittedFor !== S.scene.map) {
-        fittedFor = S.scene.map;
+      const fitKey = S.sceneId + '|' + S.scene.map + '|' + S.scene.width + 'x' + S.scene.height;
+      if (fittedFor !== fitKey) {
+        fittedFor = fitKey;
         fit();
       }
+      if (!scenesSeen) {
+        scenesSeen = true;
+        showScenes(true);
+      }
+      renderScenes();
       if (!syncInit) {
         syncInit = true;
         $('syncParty').checked = !!S.partyCam;
@@ -100,7 +127,7 @@
   /* ---------- Sincronizar el encuadre con la pantalla de party ---------- */
 
   function camChanged() {
-    if (!$('syncParty').checked || camTimer) return;
+    if (!$('syncParty').checked || camTimer || !S || S.sceneId !== S.activeSceneId) return;
     camTimer = setTimeout(() => {
       camTimer = null;
       if ($('syncParty').checked) conn.send({ t: 'cam', rect: view.rect() });
@@ -410,19 +437,168 @@
     const file = e.target.files[0];
     if (!file) return;
     try {
-      const res = await fetch(`/api/rooms/${code}/map`, { method: 'POST', headers: { 'Content-Type': file.type, 'X-GM-Key': key }, body: file });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'No se pudo subir el mapa');
-      const img = new Image();
-      img.onload = () => op('setMap', { url: data.url, width: img.naturalWidth, height: img.naturalHeight });
-      img.onerror = () => toast('No se pudo leer la imagen');
-      img.src = data.url;
+      const url = await uploadMap(file);
+      const dims = await imageSize(url);
+      op('setMap', { url, ...dims });
     } catch (err) {
       toast(err.message);
     }
     e.target.value = '';
   };
   $('mapClear').onclick = () => op('setMap', { url: null });
+
+  /* ---------- Pantalla de escenas ---------- */
+
+  function showScenes(on) {
+    $('scenesScreen').classList.toggle('hidden', !on);
+    if (on) renderScenes();
+  }
+
+  const fmtDate = (ms) => new Date(ms).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  function renderScenes() {
+    if (!S) return;
+    const active = S.scenes.find((x) => x.id === S.activeSceneId);
+    $('sceneName').textContent = S.sceneName;
+    $('awayNote').classList.toggle('hidden', S.sceneId === S.activeSceneId);
+    $('awayName').textContent = active ? active.name : '';
+    $('scenesCode').textContent = code;
+    if ($('scenesScreen').classList.contains('hidden')) return;
+    $('sceneCards').innerHTML = S.scenes.map((sc) => {
+      const isActive = sc.id === S.activeSceneId;
+      return `<div class="scene-card${isActive ? ' active' : ''}${sc.id === S.sceneId ? ' viewing' : ''}" data-id="${sc.id}">` +
+        `<div class="thumb${sc.map ? ' has-map' : ''}" data-act="open"${sc.map ? ` style="background-image:url('${P.esc(sc.map)}')"` : ''}>` +
+        (isActive ? '<span class="tag">Jugadores aquí</span>' : '') + '</div>' +
+        '<div class="body">' +
+        `<div class="title">${P.esc(sc.name)}</div>` +
+        `<div class="meta muted">${sc.npcs} PNJ · ${sc.walls} muros y puertas<br>` +
+        (sc.startAt ? `En curso · inicio fijado el ${fmtDate(sc.startAt)}` : 'Sin empezar') + '</div>' +
+        '<div class="actions">' +
+        '<button class="primary" data-act="open">Abrir</button>' +
+        (isActive ? '' : '<button data-act="play">Jugar aquí</button>') + '</div>' +
+        '<div class="actions minor">' +
+        '<button data-act="rename">Renombrar</button><button data-act="start">Fijar inicio</button>' +
+        '<button data-act="reset">Reiniciar</button>' +
+        (S.scenes.length > 1 ? '<button class="danger" data-act="del">Eliminar</button>' : '') +
+        '</div></div></div>';
+    }).join('');
+  }
+
+  $('sceneCards').addEventListener('click', (e) => {
+    const act = e.target.dataset.act, card = e.target.closest('[data-id]');
+    if (!act || !card) return;
+    const id = card.dataset.id, sc = S.scenes.find((x) => x.id === id);
+    if (!sc) return;
+    if (act === 'open') {
+      op('viewScene', { id });
+      showScenes(false);
+    } else if (act === 'play') {
+      op('activateScene', { id });
+      showScenes(false);
+    } else if (act === 'rename') {
+      const name = prompt('Nombre de la escena:', sc.name);
+      if (name && name.trim()) op('renameScene', { id, name });
+    } else if (act === 'start') {
+      if (confirm(`Se guardará el estado actual de «${sc.name}» como punto de inicio y se borrará lo que los jugadores hayan explorado en ella.\n\n¿Continuar?`)) op('setStart', { id });
+    } else if (act === 'reset') {
+      const what = sc.startAt
+        ? `«${sc.name}» volverá a su punto de inicio (${fmtDate(sc.startAt)}): posiciones de las fichas, PNJ eliminados y puertas. Se borrará lo explorado.`
+        : `«${sc.name}» aún no ha empezado: solo se borrará lo explorado y los movimientos pendientes.`;
+      if (confirm(what + '\n\n¿Reiniciar?')) op('resetScene', { id });
+    } else if (act === 'del') {
+      if (confirm(`¿Eliminar la escena «${sc.name}» con su mapa, muros y PNJ? No se puede deshacer.`)) op('delScene', { id });
+    }
+  });
+
+  $('openScenes').onclick = () => showScenes(true);
+  $('closeScenes').onclick = () => showScenes(false);
+  $('bringHere').onclick = () => op('activateScene', { id: S.sceneId });
+  $('newScene').onclick = () => {
+    const name = prompt('Nombre de la nueva escena:', 'Escena ' + (S.scenes.length + 1));
+    if (!name || !name.trim()) return;
+    op('addScene', { name });
+    showScenes(false);
+  };
+
+  /* ---------- Importar de Dungeondraft (Universal VTT) ---------- */
+
+  function importStatus(msg, isError) {
+    const el = $('importStatus');
+    el.textContent = msg || '';
+    el.classList.toggle('hidden', !msg);
+    el.classList.toggle('error', !!isError);
+  }
+
+  async function uploadMap(blob) {
+    const res = await fetch(`/api/rooms/${code}/map`, { method: 'POST', headers: { 'Content-Type': blob.type, 'X-GM-Key': key }, body: blob });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo subir el mapa');
+    return data.url;
+  }
+
+  const imageSize = (url) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => reject(new Error('No se pudo leer la imagen del mapa'));
+    img.src = url;
+  });
+
+  function base64ToBlob(b64, type) {
+    const parts = [];
+    const CHUNK = 3 * 256 * 1024 * 4 / 3; // múltiplo de 4 caracteres
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      const bin = atob(b64.slice(i, i + CHUNK));
+      const bytes = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+      parts.push(bytes);
+    }
+    return new Blob(parts, { type });
+  }
+
+  async function importDungeondraft(file) {
+    try {
+      importStatus('Leyendo ' + file.name + '…');
+      let data;
+      try {
+        data = JSON.parse(await file.text());
+      } catch {
+        throw new Error('El archivo no es un mapa de Dungeondraft. Expórtalo como «Universal VTT» (.dd2vtt).');
+      }
+      if (!data || !data.resolution) throw new Error('El archivo no es un mapa de Dungeondraft. Expórtalo como «Universal VTT» (.dd2vtt).');
+      let map = null, dims = {};
+      if (typeof data.image === 'string' && data.image.length > 100) {
+        importStatus('Subiendo la imagen del mapa…');
+        const b64 = data.image.replace(/\s+/g, '');
+        const url = await uploadMap(base64ToBlob(b64, Uvtt.imageMime(b64)));
+        dims = await imageSize(url);
+        map = { url };
+      }
+      const parsed = Uvtt.parse(data, dims.width, dims.height);
+      importStatus('Creando la escena…');
+      const res = await fetch(`/api/rooms/${code}/scenes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-GM-Key': key },
+        body: JSON.stringify({ name: file.name.replace(/\.[^.]+$/, ''), map, ...parsed }),
+      });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || 'No se pudo crear la escena');
+      importStatus(`Importada: ${out.walls} muros y puertas, ${out.lights} luces.`);
+      op('viewScene', { id: out.id });
+      setTimeout(() => {
+        importStatus('');
+        showScenes(false);
+      }, 1200);
+    } catch (err) {
+      importStatus(err.message || 'No se pudo importar el mapa', true);
+    }
+  }
+
+  $('importDd').onclick = () => $('ddFile').click();
+  $('ddFile').onchange = (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (file) importDungeondraft(file);
+  };
 
   /* ---------- Enlaces para compartir ---------- */
 
@@ -505,7 +681,12 @@
 
     if (preview !== 'gm') {
       const viewers = preview === 'party' ? pcs : live.filter((t) => t.id === preview);
-      P.drawFog(view, fog.render(env, viewers), 0.82);
+      const mkey = preview + '|' + viewers.map((v) => v.id).join(',');
+      if (memoryCache.key !== mkey) {
+        const by = exploredRaw ? exploredRaw.by : {};
+        memoryCache = { key: mkey, mask: P.exploredMask(exploredRaw, viewers.map((v) => by[v.id])) };
+      }
+      P.drawFog(view, fog.render(env, viewers, memoryCache.mask), 0.82);
     }
     view.applyWorld(ctx);
 
@@ -531,23 +712,23 @@
     // Línea de visión de cada jugador
     if (preview === 'gm') for (const v of pcs) drawVisionOutline(v, env);
 
-    // Muros y puertas
+    // Muros y puertas, agrupados por estilo (un mapa importado puede traer miles)
     ctx.lineCap = 'round';
-    for (const w of S.walls) {
+    const strokeWalls = (test, color, width, dash) => {
       ctx.beginPath();
-      ctx.moveTo(w.x1, w.y1);
-      ctx.lineTo(w.x2, w.y2);
-      if (w.type === 'door') {
-        ctx.setLineDash(w.open ? [6 / z, 8 / z] : []);
-        ctx.strokeStyle = w.open ? '#5bd68a' : '#3da5ff';
-        ctx.lineWidth = 6 / z;
-      } else {
-        ctx.setLineDash([]);
-        ctx.strokeStyle = '#ff6a3d';
-        ctx.lineWidth = 3 / z;
+      for (const w of S.walls) {
+        if (!test(w)) continue;
+        ctx.moveTo(w.x1, w.y1);
+        ctx.lineTo(w.x2, w.y2);
       }
+      ctx.setLineDash(dash);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width / z;
       ctx.stroke();
-    }
+    };
+    strokeWalls((w) => w.type !== 'door', '#ff6a3d', 3, []);
+    strokeWalls((w) => w.type === 'door' && !w.open, '#3da5ff', 6, []);
+    strokeWalls((w) => w.type === 'door' && w.open, '#5bd68a', 6, [6 / z, 8 / z]);
     ctx.setLineDash([]);
 
     // Movimientos propuestos

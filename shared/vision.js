@@ -52,6 +52,29 @@
     return Math.hypot(px - (s.x1 + dx * t), py - (s.y1 + dy * t));
   }
 
+  // Los cruces entre muros no dependen del observador: se calculan una vez por lista de muros.
+  const crossCache = new WeakMap();
+  function wallCrossings(segs) {
+    let pts = crossCache.get(segs);
+    if (pts) return pts;
+    pts = [];
+    const n = segs.length;
+    for (let i = 0; i < n; i++) {
+      const a = segs[i], adx = a.x2 - a.x1, ady = a.y2 - a.y1;
+      for (let j = i + 1; j < n; j++) {
+        const b = segs[j], bdx = b.x2 - b.x1, bdy = b.y2 - b.y1;
+        const den = adx * bdy - ady * bdx;
+        if (Math.abs(den) < 1e-9) continue;
+        const t = ((b.x1 - a.x1) * bdy - (b.y1 - a.y1) * bdx) / den;
+        if (t <= 0 || t >= 1) continue;
+        const u = ((b.x1 - a.x1) * ady - (b.y1 - a.y1) * adx) / den;
+        if (u > 0 && u < 1) pts.push(a.x1 + adx * t, a.y1 + ady * t);
+      }
+    }
+    crossCache.set(segs, pts);
+    return pts;
+  }
+
   /**
    * Polígono de visibilidad desde (ox, oy).
    * segs: paredes que bloquean. bounds: {x0,y0,x1,y1} límites del mapa.
@@ -71,6 +94,7 @@
     } else {
       list = segs.slice();
     }
+    const nWalls = list.length;
     list.push(
       { x1: x0, y1: y0, x2: x1, y2: y0 },
       { x1: x1, y1: y0, x2: x1, y2: y1 },
@@ -85,7 +109,7 @@
       S[i] = { x: s.x1, y: s.y1, dx: s.x2 - s.x1, dy: s.y2 - s.y1 };
     }
 
-    // Puntos objetivo: extremos de pared + cruces entre paredes.
+    // Puntos objetivo: extremos de pared, cruces entre paredes y cruces con la caja.
     const seen = new Set();
     const angles = [];
     const addPoint = (x, y) => {
@@ -96,10 +120,17 @@
       angles.push(a - 1e-4, a, a + 1e-4);
     };
     for (let i = 0; i < n; i++) {
+      addPoint(S[i].x, S[i].y);
+      addPoint(S[i].x + S[i].dx, S[i].y + S[i].dy);
+    }
+    const cross = wallCrossings(segs);
+    for (let k = 0; k < cross.length; k += 2) {
+      const x = cross[k], y = cross[k + 1];
+      if (x >= x0 && x <= x1 && y >= y0 && y <= y1) addPoint(x, y);
+    }
+    for (let i = 0; i < nWalls; i++) {
       const a = S[i];
-      addPoint(a.x, a.y);
-      addPoint(a.x + a.dx, a.y + a.dy);
-      for (let j = i + 1; j < n; j++) {
+      for (let j = nWalls; j < n; j++) {
         const b = S[j];
         const den = a.dx * b.dy - a.dy * b.dx;
         if (Math.abs(den) < 1e-9) continue;
@@ -110,12 +141,31 @@
     }
     angles.sort((p, q) => p - q);
 
+    // Cada pared se apunta en los sectores angulares que ocupa vista desde el observador,
+    // de modo que cada rayo solo se prueba contra las paredes de su sector.
+    const B = 256, K = B / TAU;
+    const buckets = new Array(B);
+    for (let b = 0; b < B; b++) buckets[b] = [];
+    for (let i = 0; i < n; i++) {
+      const s = S[i];
+      const a1 = Math.atan2(s.y - oy, s.x - ox), a2 = Math.atan2(s.y + s.dy - oy, s.x + s.dx - ox);
+      let d = a2 - a1;
+      if (d > Math.PI) d -= TAU;
+      else if (d < -Math.PI) d += TAU;
+      const start = d >= 0 ? a1 : a2;
+      const b0 = Math.floor((start + Math.PI) * K) - 1;
+      const b1 = Math.floor((start + Math.abs(d) + Math.PI) * K) + 1;
+      for (let b = b0; b <= b1; b++) buckets[((b % B) + B) % B].push(i);
+    }
+
     const poly = [];
     for (let k = 0; k < angles.length; k++) {
-      const dx = Math.cos(angles[k]), dy = Math.sin(angles[k]);
+      const ang = angles[k];
+      const dx = Math.cos(ang), dy = Math.sin(ang);
+      const bucket = buckets[((Math.floor((ang + Math.PI) * K) % B) + B) % B];
       let best = Infinity;
-      for (let i = 0; i < n; i++) {
-        const s = S[i];
+      for (let q = 0; q < bucket.length; q++) {
+        const s = S[bucket[q]];
         const den = dx * s.dy - dy * s.dx;
         if (Math.abs(den) < 1e-12) continue;
         const t = ((s.x - ox) * s.dy - (s.y - oy) * s.dx) / den;
@@ -152,30 +202,45 @@
   }
 
   /**
-   * ¿El observador v ve el punto (px, py)?
-   * env: { segs, lights:[{x,y,r}], grid, dark }
+   * Parte de la visión que no depende de los muros: ángulo, alcance y luz.
+   * isLit(): ¿está iluminado el punto? Solo se consulta en escenas a oscuras.
    * invisible: el objetivo solo es visible con visión verdadera.
    */
-  function pointVisible(v, px, py, env, invisible) {
+  function withinSight(v, px, py, grid, dark, isLit, invisible) {
     const dx = px - v.x, dy = py - v.y;
     const d = Math.hypot(dx, dy);
     if (v.angle < 360 && d > 1e-6) {
       const half = (v.angle * Math.PI) / 360;
       if (Math.abs(angleDiff(Math.atan2(dy, dx), v.facing || 0)) > half) return false;
     }
-    if (!los(v.x, v.y, px, py, env.segs)) return false;
-    const g = env.grid;
-    const ts = (v.truesight || 0) * g;
+    const ts = (v.truesight || 0) * grid;
     if (invisible) return d <= ts;
     if (d <= ts) return true;
-    const range = (v.range || 0) * g;
-    if (!env.dark) return range === 0 || d <= range;
-    if (d <= (v.darkvision || 0) * g) return true;
+    const range = (v.range || 0) * grid;
+    if (!dark) return range === 0 || d <= range;
+    if (d <= (v.darkvision || 0) * grid) return true;
     if (range > 0 && d > range) return false;
+    return isLit();
+  }
+
+  function litAt(px, py, env) {
     for (const L of env.lights) {
       if (Math.hypot(px - L.x, py - L.y) <= L.r && los(L.x, L.y, px, py, env.segs)) return true;
     }
     return false;
+  }
+
+  const YES = () => true;
+
+  /**
+   * ¿El observador v ve el punto (px, py)?
+   * env: { segs, lights:[{x,y,r}], grid, dark }
+   */
+  function pointVisible(v, px, py, env, invisible) {
+    // Primero lo barato (ángulo y alcance), luego los muros y al final la luz.
+    if (!withinSight(v, px, py, env.grid, env.dark, YES, invisible)) return false;
+    if (!los(v.x, v.y, px, py, env.segs)) return false;
+    return withinSight(v, px, py, env.grid, env.dark, () => litAt(px, py, env), invisible);
   }
 
   /** ¿El observador v ve la ficha t? Basta con que vea el centro o parte del borde. */
@@ -195,6 +260,6 @@
 
   return {
     TAU, blocking, segHit, los, angleDiff, distPointSeg, visibilityPolygon,
-    pointInPolygon, tokenRadius, collectLights, pointVisible, tokenVisible,
+    pointInPolygon, tokenRadius, collectLights, withinSight, pointVisible, tokenVisible,
   };
 });

@@ -227,6 +227,9 @@ const P = (() => {
       }
       for (const id of this.m.keys()) if (!seen.has(id)) this.m.delete(id);
     }
+    reset() {
+      this.m.clear();
+    }
     snap(t) {
       this.m.set(t.id, { fx: t.x, fy: t.y, tx: t.x, ty: t.y, t0: -1e9 });
     }
@@ -385,6 +388,47 @@ const P = (() => {
     ctx.restore();
   }
 
+  /* ---------- Memoria de lo explorado ---------- */
+
+  // Opacidad de la niebla sobre lo ya explorado que ahora no se ve (0 = sin niebla, 1 = negro).
+  const MEMORY_ALPHA = 0.3;
+
+  function decodeBits(b64, len) {
+    if (!b64) return null;
+    let bin;
+    try { bin = atob(b64); } catch { return null; }
+    if (bin.length !== len) return null;
+    const out = new Uint8Array(len);
+    for (let i = 0; i < len; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  /**
+   * Convierte la memoria que envía el servidor en una imagen pequeña (una celda = un píxel).
+   * head: { cols, rows, cell }. list: mapas de bits en base64; se unen todos.
+   */
+  function exploredMask(head, list) {
+    if (!head) return null;
+    const n = head.cols * head.rows, len = Math.ceil(n / 8);
+    const acc = new Uint8Array(len);
+    let any = false;
+    for (const b64 of list) {
+      const bits = decodeBits(b64, len);
+      if (!bits) continue;
+      any = true;
+      for (let k = 0; k < len; k++) acc[k] |= bits[k];
+    }
+    if (!any) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = head.cols;
+    canvas.height = head.rows;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(head.cols, head.rows);
+    for (let i = 0; i < n; i++) if ((acc[i >> 3] >> (i & 7)) & 1) img.data[i * 4 + 3] = 255;
+    ctx.putImageData(img, 0, 0);
+    return { canvas, w: head.cols * head.cell, h: head.rows * head.cell };
+  }
+
   /* ---------- Niebla ---------- */
 
   /**
@@ -427,8 +471,12 @@ const P = (() => {
       return p;
     }
 
-    /** env: { segs, lights:[{x,y,r}], grid, dark, bounds }. viewers: fichas con posición ya animada. */
-    render(env, viewers) {
+    /**
+     * env: { segs, lights:[{x,y,r}], grid, dark, bounds }. viewers: fichas con posición ya animada.
+     * memory: resultado de exploredMask() o null. Lo explorado queda bajo una niebla tenue,
+     * lo nunca visto en negro y lo que se ve ahora, despejado.
+     */
+    render(env, viewers, memory) {
       const view = this.view, g = env.grid;
       const vis = this._prep(this.vis);
 
@@ -493,6 +541,14 @@ const P = (() => {
       fc.fillStyle = '#000';
       fc.fillRect(0, 0, this.fog.width, this.fog.height);
       fc.globalCompositeOperation = 'destination-out';
+      if (memory) {
+        fc.globalAlpha = 1 - MEMORY_ALPHA;
+        view.applyWorld(fc);
+        fc.imageSmoothingEnabled = true;
+        fc.drawImage(memory.canvas, 0, 0, memory.w, memory.h);
+        fc.setTransform(1, 0, 0, 1, 0, 0);
+        fc.globalAlpha = 1;
+      }
       fc.drawImage(this.vis, 0, 0);
       return this.fog;
     }
@@ -507,5 +563,5 @@ const P = (() => {
     ctx.restore();
   }
 
-  return { TAU, BIG, qs, esc, connect, View, attachInput, scheduler, Animator, image, polyPath, piePath, drawBackdrop, drawToken, drawProposal, Fog, drawFog };
+  return { TAU, BIG, qs, esc, connect, View, attachInput, scheduler, Animator, image, polyPath, piePath, drawBackdrop, drawToken, drawProposal, exploredMask, Fog, drawFog };
 })();

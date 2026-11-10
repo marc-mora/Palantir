@@ -25,7 +25,11 @@
 
     <main class="gm-main">
       <canvas id="c"></canvas>
-      <div class="gm-top"><span class="chip"><span id="status" class="status"></span>Máster</span></div>
+      <div class="gm-top">
+        <span class="chip"><span id="status" class="status"></span><span id="sceneName">Máster</span></span>
+        <button id="openScenes" class="pill">Escenas</button>
+        <span id="awayNote" class="chip warn hidden">Los jugadores están en «<span id="awayName"></span>»<button id="bringHere" class="small primary">Traerlos aquí</button></span>
+      </div>
       <div id="hint" class="gm-hint"></div>
     </main>
 
@@ -97,6 +101,23 @@
     </aside>
   </div>
 
+  <div id="scenesScreen" class="scenes hidden">
+    <header>
+      <div>
+        <h2>Escenas</h2>
+        <p class="muted">Partida <b id="scenesCode"></b> · todo se guarda solo: puedes cerrar y seguir luego donde lo dejaste.</p>
+      </div>
+      <div class="scenes-actions">
+        <button id="newScene">＋ Nueva escena</button>
+        <button id="importDd" class="primary">Importar de Dungeondraft</button>
+        <input id="ddFile" type="file" accept=".dd2vtt,.uvtt,.df2vtt,.json" class="hidden">
+        <button id="closeScenes">Cerrar</button>
+      </div>
+    </header>
+    <p id="importStatus" class="import-status hidden"></p>
+    <div id="sceneCards" class="scene-grid"></div>
+  </div>
+
   <div id="overlay" class="overlay hidden">
     <div id="overlayMsg"></div>
     <a href="/">Volver al inicio</a>
@@ -104,6 +125,7 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="/shared/vision.js"></script>
+  <script src="/shared/uvtt.js"></script>
   <script src="/common.js"></script>
   <script src="/gm.js"></script>
 </body>

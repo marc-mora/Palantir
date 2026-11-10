@@ -108,3 +108,33 @@ test('el polígono coincide con pointVisible en puntos al azar (paredes cruzadas
   }
   assert.equal(mismatches, 0);
 });
+
+test('con cientos de muros el polígono sigue coincidiendo con pointVisible (con y sin radio)', () => {
+  let seed = 99;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const W = 3000, H = 2000;
+  const walls = [];
+  for (let i = 0; i < 400; i++) {
+    const x = rnd() * W, y = rnd() * H, a = rnd() * Math.PI * 2, len = 20 + rnd() * 250;
+    walls.push(wall(x, y, x + Math.cos(a) * len, y + Math.sin(a) * len));
+  }
+  const segs = V.blocking(walls);
+  const bounds = { x0: 0, y0: 0, x1: W, y1: H };
+  let checked = 0, mismatches = 0;
+  for (let k = 0; k < 6; k++) {
+    const v = viewer({ x: 100 + rnd() * (W - 200), y: 100 + rnd() * (H - 200) });
+    if (segs.some((s) => V.distPointSeg(v.x, v.y, s) < 3)) continue;
+    for (const maxR of [Infinity, 500]) {
+      const poly = V.visibilityPolygon(v.x, v.y, segs, bounds, maxR);
+      for (let i = 0; i < 1500; i++) {
+        const px = rnd() * W, py = rnd() * H;
+        if (Math.hypot(px - v.x, py - v.y) > Math.min(maxR, 1e9)) continue;
+        if (segs.some((s) => V.distPointSeg(px, py, s) < 1.5)) continue;
+        checked++;
+        if (V.pointInPolygon(px, py, poly) !== V.pointVisible(v, px, py, env(walls))) mismatches++;
+      }
+    }
+  }
+  assert.ok(checked > 3000, 'se han comprobado suficientes puntos: ' + checked);
+  assert.equal(mismatches, 0);
+});

@@ -15,6 +15,7 @@
   let mode = 'move'; // 'move' | 'look'
   let follow = true; // la cámara sigue a mi ficha (jugador) o a la vista del máster (party)
   let framed = false;
+  let memory = null; // lo ya explorado (imagen de baja resolución)
 
   const redraw = P.scheduler(draw);
   view.onResize = () => {
@@ -35,6 +36,16 @@
       }
       if (m.t !== 'state') return;
       const prevMe = me();
+      const sameScene = S && S.sceneId === m.sceneId;
+      // Los muros y lo explorado solo llegan cuando cambian.
+      if (!m.segs) m.segs = sameScene ? S.segs : [];
+      if (m.explored !== undefined) memory = P.exploredMask(m.explored, m.explored ? [m.explored.bits] : []);
+      if (S && !sameScene) {
+        // El máster ha cambiado de escena.
+        anim.reset();
+        framed = false;
+        follow = true;
+      }
       S = m;
       anim.update(S.tokens);
       updateHud();
@@ -45,7 +56,7 @@
           framed = true;
         }
         // Al moverse mi ficha, la cámara vuelve a seguirla.
-        if (now && prevMe && (now.x !== prevMe.x || now.y !== prevMe.y)) follow = true;
+        if (now && prevMe && sameScene && (now.x !== prevMe.x || now.y !== prevMe.y)) follow = true;
       } else if (!framed || follow) {
         frameParty();
         framed = true;
@@ -133,7 +144,7 @@
     const byId = new Map(S.tokens.map((t) => [t.id, t]));
     const lights = S.lights.map((L) => (L.tid && byId.has(L.tid) ? { ...L, ...anim.pos(byId.get(L.tid)) } : L));
     const env = { segs: S.segs, lights, grid: g, dark: scene.dark, bounds: { x0: 0, y0: 0, x1: scene.width, y1: scene.height } };
-    P.drawFog(view, fog.render(env, viewers), 1);
+    P.drawFog(view, fog.render(env, viewers, memory), 1);
 
     view.applyWorld(view.ctx);
     for (const v of viewers) {
