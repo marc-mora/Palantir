@@ -26,6 +26,8 @@ Mapa de rol con **campo de visión por jugador**. El máster carga un mapa, dibu
 
 Los muros y las puertas cerradas cortan la visión y la luz. Las puertas abiertas no.
 
+**Nadie ve su espalda**: un jugador nuevo ve 180° hacia donde mira (el máster puede cambiar el ángulo por ficha, hasta 360° para criaturas que lo ven todo). El cono también recorta la visión nocturna y la verdadera. Al moverse, la ficha queda mirando en la dirección del movimiento; el jugador puede girarse cuando quiera con «Mirar» y el máster con el control de orientación.
+
 El servidor decide qué fichas recibe cada cliente: la posición de un PNJ que tu personaje no ve **no llega a tu móvil**. (La imagen del mapa y los muros sí se envían enteros y se tapan en el dispositivo.)
 
 ## Ponerlo en marcha

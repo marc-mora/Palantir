@@ -23,6 +23,7 @@ const ROOMS_DIR = path.join(DATA_DIR, 'rooms');
 const MAPS_DIR = path.join(DATA_DIR, 'maps');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_MAP_BYTES = 25 * 1024 * 1024;
+const DEFAULT_PC_ANGLE = 180; // grados de campo de visión de un jugador recién creado
 
 fs.mkdirSync(ROOMS_DIR, { recursive: true });
 fs.mkdirSync(MAPS_DIR, { recursive: true });
@@ -216,7 +217,8 @@ function gmOp(room, m) {
         color: kind === 'pc' ? PALETTE[count % PALETTE.length] : '#8b1e1e',
         x: num(m.x, 0, -COORD, COORD), y: num(m.y, 0, -COORD, COORD),
         facing: 0, size: 1,
-        range: 0, angle: 360, darkvision: 0, truesight: 0, light: 0,
+        // Un personaje no ve lo que tiene a la espalda: por defecto, medio círculo hacia donde mira.
+        range: 0, angle: kind === 'pc' ? DEFAULT_PC_ANGLE : 360, darkvision: 0, truesight: 0, light: 0,
         hidden: false, invisible: false,
       };
       room.tokens.push(t);
