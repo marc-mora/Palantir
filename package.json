@@ -1,0 +1,18 @@
+{
+  "name": "palantir",
+  "version": "0.1.0",
+  "description": "Mesa de rol con campo de visión por jugador: vista de máster, de jugador y de party.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  }
+}

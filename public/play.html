@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Palantir · Jugador</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-role="player">
+  <div class="stage"><canvas id="c"></canvas></div>
+
+  <div class="hud-top">
+    <span class="chip"><span id="status" class="status"></span><span id="dot" class="dot"></span><span id="who">Conectando…</span></span>
+  </div>
+
+  <div class="hud-bottom">
+    <div id="pending" class="banner hidden">
+      <span>Movimiento propuesto. Esperando al máster…</span>
+      <button id="cancel" class="small">Cancelar</button>
+    </div>
+    <div class="bar">
+      <button id="modeMove" class="active">Mover</button>
+      <button id="modeLook" class="hidden">Mirar</button>
+      <button id="center">Centrar</button>
+    </div>
+  </div>
+
+  <div id="overlay" class="overlay hidden">
+    <div id="overlayMsg"></div>
+    <a id="back" href="/">Volver</a>
+  </div>
+
+  <script src="/shared/vision.js"></script>
+  <script src="/common.js"></script>
+  <script src="/play.js"></script>
+</body>
+</html>

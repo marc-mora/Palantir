@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Palantir</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="home">
+    <h1>Palantir</h1>
+    <p class="tagline">Mapa de rol con campo de visión por jugador.</p>
+
+    <div class="card">
+      <h2>Unirse a una partida</h2>
+      <div class="row">
+        <input id="code" type="text" maxlength="12" placeholder="CÓDIGO" autocomplete="off" autocapitalize="characters">
+        <button id="join" class="primary">Entrar</button>
+      </div>
+      <p id="joinMsg" class="muted hidden"></p>
+      <div id="pcs" class="pc-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>Soy el máster</h2>
+      <button id="create" class="primary">Crear partida nueva</button>
+      <div id="myRooms" class="room-list" style="margin-top:12px"></div>
+    </div>
+  </div>
+  <script src="/index.js"></script>
+</body>
+</html>
