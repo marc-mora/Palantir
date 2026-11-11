@@ -18,15 +18,25 @@ Mapa de rol con **campo de visión por jugador**. El máster carga un mapa, dibu
   - Si su visión es un cono (menos de 360°), «Mirar» le deja girarse.
 - **Party** (para una tele o tablet en la mesa): unión de los campos de visión y de lo explorado por todos los jugadores. Se abre con el enlace del panel del máster, que lleva una clave.
 
-### Reserva de personajes y PNJ
+### Personajes, PNJ y reserva
 
-En el panel del máster, «Reserva» guarda fichas ya preparadas (nombre, color, tamaño, visión, luz, movimiento…) que todavía no están en el mapa. La reserva es de la partida, así que vale para todas las escenas.
+El botón **Personajes** del máster abre la pantalla donde se crean las fichas de jugadores y PNJ. Lo que se crea ahí queda en la **reserva**, disponible en todas las escenas de la partida, hasta que el máster lo saca al mapa.
 
-- **Sacar**: pulsa «Sacar» y haz clic en el mapa donde quieras que aparezca.
-- **PNJ**: son plantillas. Cada vez que sacas uno se crea una copia («Goblin», «Goblin 2»…) y la plantilla sigue en la reserva.
-- **Personajes jugadores**: son únicos. Al sacarlo entra en juego y sale de la reserva. Su jugador puede elegirlo desde el principio; su móvil espera hasta que el máster lo saque.
+Cada ficha tiene:
+
+- **Identidad**: nombre, tipo, color y tamaño.
+- **Ficha del máster**, que solo ve él: vida actual y máxima, características libres (pares nombre/valor: «Fuerza 19», «CA 11»…), habilidades y notas. Nada de esto se envía a los jugadores ni a la pantalla de party.
+- **Visión y movimiento**: lo que afecta al mapa (alcance, ángulo, visión nocturna y verdadera, luz, movimiento por turno, invisible, sale oculta).
+
+Uso:
+
+- **Sacar**: «Sacar» (en la ficha o en la lista de reserva del panel) y un clic en el mapa donde quieras que aparezca.
+- **PNJ**: son plantillas. Cada vez que sacas uno se crea una copia («Goblin», «Goblin 2»…) con su propia vida y notas, y la plantilla sigue en la reserva. «Duplicar» sirve para hacer variantes.
+- **Personajes jugadores**: son únicos y su ficha es la misma en todas las escenas. Su jugador puede elegirlo desde el principio; su móvil espera hasta que el máster lo saque.
 - **Sale oculta**: una ficha así entra al mapa sin que los jugadores la vean hasta que el máster la descubra.
-- **Retirar a la reserva**: quita una ficha del mapa guardando sus características. Un personaje retirado conserva su móvil y lo que había explorado.
+- **En el mapa**: el máster ve una barra de vida sobre cada ficha que la tenga, puede cambiarla desde el panel y abrir la «Ficha completa».
+- **Retirar a la reserva**: quita una ficha del mapa guardando su ficha tal como está. Un personaje retirado conserva su móvil y lo que había explorado.
+- Al **reiniciar** una escena, los PNJ recuperan la vida que tenían en el punto de inicio; la de los jugadores no se toca.
 
 ### Combate
 

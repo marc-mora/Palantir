@@ -40,7 +40,9 @@ const DEFAULT_ANGLE = 360;
 const DEFAULT_PC_RANGE = 8;
 // Datos del personaje (iguales en todas las escenas). Posición, orientación y
 // ocultación son propias de cada escena.
-const CHAR_FIELDS = ['name', 'color', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light', 'speed'];
+const CHAR_FIELDS = ['name', 'color', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light', 'speed', 'hp', 'hpMax', 'attrs', 'abilities', 'notes'];
+// Ficha privada del máster: vida, características, habilidades y notas. Nunca se envía a los jugadores.
+const blankSheet = () => ({ hp: 0, hpMax: 0, attrs: [], abilities: '', notes: '' });
 const DEFAULT_SPEED = 6; // casillas por turno
 const MAX_ROSTER = 300;
 // Lo que se guarda de una ficha en la reserva: sus características, sin posición.
@@ -142,6 +144,8 @@ function resetScene(sc) {
       const s = snap.get(t.id);
       if (!s) continue;
       t.x = s.x; t.y = s.y; t.facing = s.facing; t.hidden = s.hidden; t.invisible = s.invisible;
+      // Los PNJ recuperan también la vida que tenían al empezar; la de los jugadores es cosa suya.
+      if (t.kind === 'npc' && 'hp' in s) t.hp = s.hp;
     }
     for (const s of sc.start.tokens) {
       if (s.kind === 'npc' && !present.has(s.id)) sc.tokens.push(JSON.parse(JSON.stringify(s)));
@@ -209,12 +213,16 @@ function migrate(room) {
     const blank = blankScene('');
     for (const k of Object.keys(blank)) if (!(k in sc)) sc[k] = blank[k];
     for (const k of Object.keys(blank.scene)) if (!(k in sc.scene)) sc.scene[k] = blank.scene[k];
-    for (const t of sc.tokens) if (!('speed' in t)) t.speed = DEFAULT_SPEED;
+    for (const t of sc.tokens.concat(sc.start ? sc.start.tokens : [])) {
+      if (!('speed' in t)) t.speed = DEFAULT_SPEED;
+      for (const [k, v] of Object.entries(blankSheet())) if (!(k in t)) t[k] = v;
+    }
   }
   if (!sceneById(room, room.activeSceneId)) room.activeSceneId = room.scenes[0].id;
   if (!room.partyKey) room.partyKey = newSecret().slice(0, 12);
   if (!room.claims || typeof room.claims !== 'object') room.claims = {};
   if (!Array.isArray(room.roster)) room.roster = [];
+  for (const e of room.roster) for (const [k, v] of Object.entries(blankSheet())) if (!(k in e)) e[k] = v;
 }
 
 function loadRooms() {
@@ -264,6 +272,15 @@ function pushWall(sc, x1, y1, x2, y2, type, open) {
   return w;
 }
 
+const longText = (v) => (typeof v === 'string' ? v.slice(0, 6000) : '');
+const shortText = (v, max) => (typeof v === 'string' || typeof v === 'number' ? String(v).slice(0, max) : '');
+
+/** Características libres de la ficha: pares nombre/valor («Fuerza» / «16»). */
+function cleanAttrs(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 40).filter((a) => a && typeof a === 'object').map((a) => ({ k: shortText(a.k, 30), v: shortText(a.v, 60) }));
+}
+
 function applyTokenPatch(t, p) {
   if (!p || typeof p !== 'object') return;
   if ('name' in p) t.name = str(p.name, t.name, 40);
@@ -279,6 +296,11 @@ function applyTokenPatch(t, p) {
   if ('truesight' in p) t.truesight = num(p.truesight, t.truesight, 0, 1000);
   if ('light' in p) t.light = num(p.light, t.light, 0, 1000);
   if ('speed' in p) t.speed = num(p.speed, t.speed, 0, 1000);
+  if ('hp' in p) t.hp = Math.round(num(p.hp, t.hp || 0, -99999, 99999));
+  if ('hpMax' in p) t.hpMax = Math.round(num(p.hpMax, t.hpMax || 0, 0, 99999));
+  if ('attrs' in p) t.attrs = cleanAttrs(p.attrs);
+  if ('abilities' in p) t.abilities = longText(p.abilities);
+  if ('notes' in p) t.notes = longText(p.notes);
   if ('hidden' in p) t.hidden = !!p.hidden;
   if ('invisible' in p) t.invisible = !!p.invisible;
 }
@@ -390,6 +412,7 @@ function blankToken() {
   return {
     id: newId(), name: 'Ficha', kind: 'npc', color: '#8b1e1e', x: 0, y: 0, facing: 0, size: 1,
     range: 0, angle: DEFAULT_ANGLE, darkvision: 0, truesight: 0, light: 0, speed: DEFAULT_SPEED, hidden: false, invisible: false,
+    ...blankSheet(),
   };
 }
 
@@ -544,7 +567,7 @@ const isPcAnywhere = (room, id) =>
  */
 function spawnFromRoster(room, sc, entry, x, y) {
   if (sc.tokens.length >= 300) return null;
-  const t = { ...blankToken(), ...entry, x: num(x, 0, -COORD, COORD), y: num(y, 0, -COORD, COORD), facing: 0 };
+  const t = { ...blankToken(), ...JSON.parse(JSON.stringify(entry)), x: num(x, 0, -COORD, COORD), y: num(y, 0, -COORD, COORD), facing: 0 };
   if (entry.kind === 'pc') {
     room.roster = room.roster.filter((e) => e !== entry);
     sc.tokens.push(t);
@@ -578,7 +601,7 @@ function stashToRoster(room, sc, t) {
   entry.id = newId();
   entry.name = entry.name.replace(/ \d+$/, '') || entry.name; // «Goblin 3» vuelve como «Goblin»
   // Si ya hay una plantilla idéntica no se duplica.
-  const same = (a, b) => ROSTER_FIELDS.every((f) => f === 'id' || a[f] === b[f]);
+  const same = (a, b) => ROSTER_FIELDS.every((f) => f === 'id' || JSON.stringify(a[f]) === JSON.stringify(b[f]));
   if (!room.roster.some((e) => same(e, entry))) room.roster.push(entry);
 }
 
@@ -689,6 +712,15 @@ function gmOp(room, ws, m) {
       if (was === 'pc' && e.kind !== 'pc') delete room.claims[e.id];
       break;
     }
+    case 'dupRoster': {
+      const e = room.roster.find((x) => x.id === m.id);
+      if (!e || room.roster.length >= MAX_ROSTER) return;
+      const copy = JSON.parse(JSON.stringify(e));
+      copy.id = newId();
+      copy.name = (e.name.slice(0, 32) + ' (copia)');
+      room.roster.splice(room.roster.indexOf(e) + 1, 0, copy);
+      break;
+    }
     case 'delRoster': {
       const e = room.roster.find((x) => x.id === m.id);
       if (!e) return;
@@ -793,16 +825,14 @@ function gmOp(room, ws, m) {
       if (sc.tokens.length >= 300) return;
       const kind = m.kind === 'npc' ? 'npc' : 'pc';
       const count = sc.tokens.filter((t) => t.kind === kind).length;
+      // Una sola fuente de valores por defecto: blankToken().
       const t = {
-        id: newId(),
+        ...blankToken(),
         name: (kind === 'pc' ? 'Jugador ' : 'PNJ ') + (count + 1),
         kind,
         color: kind === 'pc' ? PALETTE[count % PALETTE.length] : '#8b1e1e',
         x: num(m.x, 0, -COORD, COORD), y: num(m.y, 0, -COORD, COORD),
-        facing: 0, size: 1,
-        range: kind === 'pc' ? DEFAULT_PC_RANGE : 0, angle: DEFAULT_ANGLE, darkvision: 0, truesight: 0, light: 0,
-        speed: DEFAULT_SPEED,
-        hidden: false, invisible: false,
+        range: kind === 'pc' ? DEFAULT_PC_RANGE : 0,
       };
       sc.tokens.push(t);
       if (sc.combat) sc.combat.inits[t.id] = 0; // quien llega en mitad del combate entra en la lista
