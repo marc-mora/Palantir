@@ -4,7 +4,7 @@
  * El archivo es un JSON con la imagen del mapa en base64 y, en unidades de casilla:
  *   resolution.map_origin / map_size / pixels_per_grid
  *   line_of_sight, objects_line_of_sight   polilíneas de muros
- *   portals                                puertas y ventanas ({ bounds:[a,b], closed })
+ *   portals                                puertas (closed:true) y ventanas (closed:false)
  *   lights                                 luces ({ position, range })
  *   environment.ambient_light              color ambiente "aarrggbb"
  */
@@ -52,7 +52,7 @@
   /**
    * Convierte el JSON a píxeles del mapa.
    * imgW/imgH: tamaño real de la imagen; si no coincide con lo que dice el archivo, manda la imagen.
-   * Devuelve { width, height, gridSize, dark, walls:[[x1,y1,x2,y2]], doors:[[x1,y1,x2,y2,abierta]], lights:[[x,y,radio]] }.
+   * Devuelve { width, height, gridSize, dark, walls, doors, windows (todos [[x1,y1,x2,y2]]), lights:[[x,y,radio]] }.
    */
   function parse(data, imgW, imgH) {
     if (!data || typeof data !== 'object' || !data.resolution) throw new Error('No parece un mapa exportado en formato Universal VTT');
@@ -79,13 +79,15 @@
       else for (const line of set) if (Array.isArray(line)) addPolyline(line);
     }
 
-    const doors = [];
+    // Portales: los que tapan la luz (closed:true) son puertas; los que dejan ver son ventanas.
+    const doors = [], windows = [];
     for (const p of Array.isArray(data.portals) ? data.portals : []) {
       const b = p && p.bounds;
       if (!Array.isArray(b) || b.length < 2 || !isPoint(b[0]) || !isPoint(b[1])) continue;
       const a = px(b[0]), c = px(b[1]);
-      // closed:false son huecos que dejan ver (ventanas, puertas abiertas): entran como puerta abierta.
-      doors.push([r1(a[0]), r1(a[1]), r1(c[0]), r1(c[1]), p.closed === false]);
+      const seg = [r1(a[0]), r1(a[1]), r1(c[0]), r1(c[1])];
+      if (p.closed === false) windows.push(seg);
+      else doors.push(seg);
     }
 
     const lights = [];
@@ -105,7 +107,7 @@
       dark = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 < 0.35;
     }
 
-    return { width: Math.round(width), height: Math.round(height), gridSize: r1(ppg), dark, walls, doors, lights };
+    return { width: Math.round(width), height: Math.round(height), gridSize: r1(ppg), dark, walls, doors, windows, lights };
   }
 
   return { imageMime, simplify, parse };

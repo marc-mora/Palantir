@@ -38,14 +38,18 @@
   let exploredRaw = null; // memoria de lo explorado tal como la envía el servidor
   let memoryCache = { key: null, mask: null };
   let scenesSeen = false;
+  let ruler = null; // [a, b] mientras se mide
+  let shareOrigin = location.origin;
 
   const HINTS = {
     select: 'Arrastra una ficha para moverla · clic en una puerta para abrirla o cerrarla · arrastra el fondo para mover el mapa · rueda para zoom',
     wall: 'Clic para empezar un muro y clic para cada esquina · doble clic o Esc para terminar · Mayús ajusta a la cuadrícula',
     rect: 'Arrastra para dibujar una columna u objeto que tape la vista · botón derecho para mover el mapa',
     door: 'Clic en un extremo y clic en el otro para crear una puerta',
+    window: 'Clic en un extremo y clic en el otro para crear una ventana: deja ver, pero los jugadores no pueden atravesarla',
+    ruler: 'Arrastra para medir una distancia · Esc para quitar la medida',
     light: 'Clic para colocar una luz fija (solo se nota con la escena a oscuras)',
-    erase: 'Clic sobre un muro, puerta o luz para borrarlo',
+    erase: 'Clic sobre un muro, puerta, ventana o luz para borrarlo',
   };
 
   const conn = P.connect(() => ({ t: 'hello', room: code, role: 'gm', key }), {
@@ -78,6 +82,7 @@
         anim.reset();
         sel = null;
         draft = null;
+        ruler = null;
         preview = 'gm';
         fittedFor = undefined;
       }
@@ -103,6 +108,7 @@
         syncInit = true;
         $('syncParty').checked = !!S.partyCam;
       }
+      updatePartyLink();
       renderPanel();
       redraw();
     },
@@ -201,6 +207,7 @@
   function setTool(t) {
     tool = t;
     draft = null;
+    ruler = null;
     for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('active', b.dataset.tool === t);
     $('hint').textContent = HINTS[t];
     $('c').style.cursor = t === 'select' ? 'default' : 'crosshair';
@@ -244,6 +251,14 @@
         }
         return null;
       }
+      if (tool === 'ruler') {
+        const a = { x: w.x, y: w.y };
+        return {
+          move(m) { ruler = [a, { x: m.x, y: m.y }]; redraw(); },
+          end() { redraw(); },
+          cancel() { ruler = null; redraw(); },
+        };
+      }
       if (tool === 'rect') {
         const a = snap(w);
         let b = a;
@@ -268,14 +283,14 @@
         const d = wallAt(w, true);
         if (d) op('toggleDoor', { id: d.id });
         else select(null);
-      } else if (tool === 'wall' || tool === 'door') {
+      } else if (tool === 'wall' || tool === 'door' || tool === 'window') {
         const p = snap(w, e.shiftKey);
         if (!draft) draft = { pts: [p] };
         else {
           const a = draft.pts[0];
           if (Math.hypot(a.x - p.x, a.y - p.y) < 2) draft = null; // clic en el mismo punto: terminar
           else {
-            op('addWalls', { walls: [{ x1: a.x, y1: a.y, x2: p.x, y2: p.y, type: tool === 'door' ? 'door' : 'wall' }] });
+            op('addWalls', { walls: [{ x1: a.x, y1: a.y, x2: p.x, y2: p.y, type: tool }] });
             draft = tool === 'wall' ? { pts: [p] } : null;
           }
         }
@@ -312,6 +327,7 @@
     const typing = el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el.tagName === 'INPUT' && !['checkbox', 'range', 'color', 'file'].includes(el.type));
     if (e.key === 'Escape') {
       draft = null;
+      ruler = null;
       redraw();
     } else if (typing) {
       return;
@@ -345,14 +361,42 @@
       (ids.length > 1 ? '<button class="small primary" data-approve-all="1">Mover a todos</button>' : '') +
       (ids.length ? '<p class="muted" style="font-size:12px;margin:6px 0 0">Arrastra el destino en el mapa para corregirlo antes de mover.</p>' : '');
 
+    // Combate
+    const cb = $('combatBody');
+    if (!(cb.contains(active) && active.tagName === 'INPUT')) {
+      const c = S.combat;
+      if (!c) {
+        cb.innerHTML = '<button class="small primary" data-combat="combatStart">Iniciar combate</button>' +
+          '<p class="muted" style="font-size:12px;margin:6px 0 0">Orden de iniciativa, turnos y límite de movimiento por turno.</p>';
+      } else {
+        const out = S.tokens.filter((t) => !(t.id in c.inits));
+        cb.innerHTML =
+          `<div class="row" style="margin-bottom:6px"><b style="flex:1">Ronda ${c.round}</b>` +
+          `<button class="small primary" data-combat="combatNext">${c.turnId ? 'Siguiente turno' : 'Empezar'}</button>` +
+          '<button class="small" data-combat="combatEnd">Terminar</button></div>' +
+          c.order.map((id) => {
+            const t = tokenById(id);
+            if (!t) return '';
+            const moved = t.speed > 0 ? `${P.fmtNum(Math.min(t.speed, c.moved[id] || 0))}/${P.fmtNum(t.speed)}` : '';
+            return `<div class="combat-row${id === c.turnId ? ' now' : ''}"><span class="dot" style="background:${P.esc(t.color)}"></span>` +
+              `<span class="name">${P.esc(t.name)}</span><span class="moved" title="Casillas movidas este turno">${moved}</span>` +
+              `<input type="number" value="${c.inits[id]}" data-init="${id}" title="Iniciativa">` +
+              `<button class="small" data-ctoggle="${id}" title="Sacar del combate">✕</button></div>`;
+          }).join('') +
+          (out.length ? '<p class="combat-out muted">Fuera del combate: ' + out.map((t) => `<button class="small" data-ctoggle="${t.id}">＋ ${P.esc(t.name)}</button>`).join('') + '</p>' : '');
+      }
+    }
+
     // Lista de fichas
     const online = new Set(S.online);
+    const claimed = new Set(S.claimed);
     $('tokens').innerHTML = S.tokens.length
       ? S.tokens.map((t) =>
           `<div class="token-row${t.id === sel ? ' sel' : ''}" data-id="${t.id}">` +
           `<span class="dot" style="background:${P.esc(t.color)}"></span><span class="name">${P.esc(t.name)}</span>` +
           (t.hidden ? '<span class="badge">oculta</span>' : '') +
           (t.invisible ? '<span class="badge">invisible</span>' : '') +
+          (claimed.has(t.id) ? '<span class="badge" title="Ligado al dispositivo de un jugador">ligado</span>' : '') +
           (t.kind === 'pc' ? `<span class="online${online.has(t.id) ? ' on' : ''}" title="${online.has(t.id) ? 'Conectado' : 'Sin conectar'}"></span>` : '<span class="badge">PNJ</span>') +
           '</div>').join('')
       : '<p class="muted" style="font-size:13px">Añade fichas con los botones «＋ Jugador» y «＋ PNJ».</p>';
@@ -370,11 +414,14 @@
       $('facingOut').textContent = deg(t.facing) + '°';
       $('angleOut').textContent = t.angle >= 360 ? '360° (todo alrededor)' : t.angle + '°';
       tokenSec.querySelector('.pc-only').classList.toggle('hidden', t.kind !== 'pc');
+      $('release').classList.toggle('hidden', !claimed.has(t.id));
     }
 
     // Escena
     const sc = S.scene;
     if (active !== $('gridSize')) $('gridSize').value = sc.gridSize;
+    if (active !== $('cellDistance')) $('cellDistance').value = sc.cellDistance;
+    if (active !== $('unit')) $('unit').value = sc.unit;
     $('showGrid').checked = sc.showGrid;
     $('dark').checked = sc.dark;
     $('allies').checked = sc.alliesAlwaysVisible;
@@ -402,6 +449,23 @@
   });
   tokenSec.addEventListener('change', (e) => sendField(e.target));
   $('delToken').onclick = () => sel && op('delToken', { id: sel });
+  $('release').onclick = () => {
+    const t = tokenById(sel);
+    if (t && confirm(`«${t.name}» dejará de estar ligado al móvil que lo lleva y ese móvil se desconectará. El siguiente que lo elija se lo queda.\n\n¿Liberar?`)) op('release', { id: sel });
+  };
+
+  $('combatBody').addEventListener('click', (e) => {
+    const d = e.target.dataset;
+    if (d.combat === 'combatEnd' && !confirm('¿Terminar el combate? Se pierde el orden de iniciativa.')) return;
+    if (d.combat) op(d.combat);
+    else if (d.ctoggle) op('combatToggle', { id: d.ctoggle });
+  });
+  $('combatBody').addEventListener('change', (e) => {
+    const id = e.target.dataset.init;
+    if (!id) return;
+    e.target.blur(); // al perder el foco la lista puede reordenarse
+    op('combatInit', { id, init: Number(e.target.value) });
+  });
 
   $('tokens').addEventListener('click', (e) => {
     const row = e.target.closest('[data-id]');
@@ -424,11 +488,13 @@
   });
 
   $('gridSize').onchange = (e) => op('setScene', { patch: { gridSize: Number(e.target.value) } });
+  $('cellDistance').onchange = (e) => op('setScene', { patch: { cellDistance: Number(e.target.value) } });
+  $('unit').onchange = (e) => op('setScene', { patch: { unit: e.target.value } });
   $('showGrid').onchange = (e) => op('setScene', { patch: { showGrid: e.target.checked } });
   $('dark').onchange = (e) => op('setScene', { patch: { dark: e.target.checked } });
   $('allies').onchange = (e) => op('setScene', { patch: { alliesAlwaysVisible: e.target.checked } });
   $('clearWalls').onclick = () => {
-    if (confirm('¿Borrar todos los muros y puertas de este mapa?')) op('clearWalls');
+    if (confirm('¿Borrar todos los muros, puertas y ventanas de este mapa?')) op('clearWalls');
   };
   $('preview').onchange = (e) => {
     preview = e.target.value;
@@ -479,8 +545,8 @@
         '<button class="primary" data-act="open">Abrir</button>' +
         (isActive ? '' : '<button data-act="play">Jugar aquí</button>') + '</div>' +
         '<div class="actions minor">' +
-        '<button data-act="rename">Renombrar</button><button data-act="start">Fijar inicio</button>' +
-        '<button data-act="reset">Reiniciar</button>' +
+        '<button data-act="rename">Renombrar</button><button data-act="dup">Duplicar</button>' +
+        '<button data-act="start">Fijar inicio</button><button data-act="reset">Reiniciar</button>' +
         (S.scenes.length > 1 ? '<button class="danger" data-act="del">Eliminar</button>' : '') +
         '</div></div></div>';
     }).join('');
@@ -500,6 +566,8 @@
     } else if (act === 'rename') {
       const name = prompt('Nombre de la escena:', sc.name);
       if (name && name.trim()) op('renameScene', { id, name });
+    } else if (act === 'dup') {
+      op('dupScene', { id });
     } else if (act === 'start') {
       if (confirm(`Se guardará el estado actual de «${sc.name}» como punto de inicio y se borrará lo que los jugadores hayan explorado en ella.\n\n¿Continuar?`)) op('setStart', { id });
     } else if (act === 'reset') {
@@ -511,6 +579,23 @@
       if (confirm(`¿Eliminar la escena «${sc.name}» con su mapa, muros y PNJ? No se puede deshacer.`)) op('delScene', { id });
     }
   });
+
+  $('backup').onclick = async () => {
+    const btn = $('backup'), label = btn.textContent;
+    btn.textContent = 'Preparando…';
+    try {
+      const res = await fetch(`/api/rooms/${code}/export`, { headers: { 'X-GM-Key': key } });
+      if (!res.ok) throw new Error('No se pudo crear la copia');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = `palantir-${code}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    } catch (err) {
+      importStatus(err.message, true);
+    }
+    btn.textContent = label;
+  };
 
   $('openScenes').onclick = () => showScenes(true);
   $('closeScenes').onclick = () => showScenes(false);
@@ -604,6 +689,11 @@
 
   /* ---------- Enlaces para compartir ---------- */
 
+  // La pantalla de party enseña lo que ve todo el grupo, así que su enlace lleva una clave.
+  function updatePartyLink() {
+    if (S) $('partyLink').href = `${shareOrigin}/party.html?room=${code}&k=${S.partyKey}`;
+  }
+
   (async () => {
     let origin = location.origin;
     try {
@@ -611,12 +701,13 @@
       // Si el máster abrió «localhost», los móviles necesitan la IP de la red local.
       if (['localhost', '127.0.0.1'].includes(location.hostname) && info.lan.length) origin = `http://${info.lan[0]}:${info.port}`;
     } catch { /* se usa location.origin */ }
+    shareOrigin = origin;
+    updatePartyLink();
     const join = `${origin}/?room=${code}`;
     $('codeBig').textContent = code;
     $('qr').src = '/qr.svg?text=' + encodeURIComponent(join);
     $('joinLink').href = join;
     $('joinLink').textContent = join.replace(/^https?:\/\//, '');
-    $('partyLink').href = `${origin}/party.html?room=${code}`;
     $('copyGm').onclick = async () => {
       try {
         await navigator.clipboard.writeText(`${origin}/gm.html?room=${code}#key=${key}`);
@@ -728,7 +819,8 @@
       ctx.lineWidth = width / z;
       ctx.stroke();
     };
-    strokeWalls((w) => w.type !== 'door', '#ff6a3d', 3, []);
+    strokeWalls((w) => w.type === 'wall', '#ff6a3d', 3, []);
+    strokeWalls((w) => w.type === 'window', '#d7a6ff', 5, [2 / z, 7 / z]);
     strokeWalls((w) => w.type === 'door' && !w.open, '#3da5ff', 6, []);
     strokeWalls((w) => w.type === 'door' && w.open, '#5bd68a', 6, [6 / z, 8 / z]);
     ctx.setLineDash([]);
@@ -736,11 +828,28 @@
     // Movimientos propuestos
     for (const t of live) {
       const p = S.proposals[t.id];
-      if (p) P.drawProposal(view, t, t, p, g);
+      if (p) P.drawProposal(view, t, t, p, g, P.distLabel(scene, Math.hypot(p.x - t.x, p.y - t.y)));
     }
 
-    // Fichas
-    for (const t of live) P.drawToken(view, t, t, g, { selected: t.id === sel, alpha: t.hidden ? 0.45 : t.invisible ? 0.7 : 1 });
+    // Fichas (con un aro en la que tiene el turno)
+    for (const t of live) {
+      if (S.combat && S.combat.turnId === t.id) P.drawTurnRing(view, t, t, g);
+      P.drawToken(view, t, t, g, { selected: t.id === sel, alpha: t.hidden ? 0.45 : t.invisible ? 0.7 : 1 });
+    }
+
+    // Regla
+    if (ruler) {
+      const [a, b] = ruler;
+      ctx.save();
+      ctx.strokeStyle = '#ffe08a';
+      ctx.lineWidth = 3 / z;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.restore();
+      P.drawLabel(view, P.distLabel(scene, Math.hypot(b.x - a.x, b.y - a.y)), b.x, b.y - 10 / z, '#ffe08a');
+    }
 
     // Muro o bloque en curso
     if (draft) {

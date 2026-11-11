@@ -24,9 +24,13 @@
     }
     msg.classList.remove('hidden');
     msg.textContent = data.pcs.length ? 'Elige tu personaje:' : 'El máster aún no ha creado personajes. Esta lista se actualiza sola.';
-    list.innerHTML =
-      data.pcs.map((p) => `<a href="/play.html?room=${data.code}&token=${p.id}"><span class="dot" style="background:${esc(p.color)}"></span>${esc(p.name)}</a>`).join('') +
-      `<a href="/party.html?room=${data.code}"><span class="dot" style="background:#888"></span>Pantalla de party (visión conjunta)</a>`;
+    list.innerHTML = data.pcs.map((p) => {
+      // Un personaje que ya lleva otro dispositivo no se puede abrir (salvo que sea este mismo).
+      const mine = localStorage.getItem(`palantir.pc.${data.code}.${p.id}`);
+      const dot = `<span class="dot" style="background:${esc(p.color)}"></span>`;
+      if (p.taken && !mine) return `<span class="taken">${dot}${esc(p.name)}<small>en uso en otro dispositivo</small></span>`;
+      return `<a href="/play.html?room=${data.code}&token=${p.id}">${dot}${esc(p.name)}${mine ? '<small>tu personaje</small>' : ''}</a>`;
+    }).join('');
     pollTimer = setTimeout(() => loadRoom(code), 4000);
   }
 
@@ -45,6 +49,24 @@
   // Partidas que este navegador ha creado como máster.
   const mine = Object.keys(localStorage).filter((k) => k.startsWith(GM_PREFIX)).map((k) => k.slice(GM_PREFIX.length));
   $('myRooms').innerHTML = mine.map((c) => `<a href="/gm.html?room=${esc(c)}">Continuar partida <b>${esc(c)}</b></a>`).join('');
+
+  // Restaurar una partida entera desde un archivo de copia de seguridad.
+  $('restore').onclick = () => $('restoreFile').click();
+  $('restoreFile').onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    $('restoreMsg').textContent = 'Restaurando…';
+    try {
+      const res = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: file });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo restaurar');
+      localStorage.setItem(GM_PREFIX + data.code, data.gmKey);
+      location.href = '/gm.html?room=' + data.code;
+    } catch (err) {
+      $('restoreMsg').textContent = err.message;
+    }
+  };
 
   const pre = new URLSearchParams(location.search).get('room');
   if (pre) {

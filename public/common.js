@@ -11,9 +11,10 @@ const P = (() => {
   /* ---------- Conexión con reconexión automática ---------- */
 
   function connect(hello, handlers) {
-    let ws = null, retry = 0, timer = null;
+    let ws = null, retry = 0, timer = null, stopped = false;
     function open() {
       clearTimeout(timer);
+      if (stopped) return;
       ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
       const mine = ws;
       mine.onopen = () => {
@@ -29,17 +30,23 @@ const P = (() => {
       mine.onclose = () => {
         if (ws !== mine) return;
         if (handlers.onStatus) handlers.onStatus(false);
-        timer = setTimeout(open, Math.min(5000, 500 * 2 ** retry++));
+        if (!stopped) timer = setTimeout(open, Math.min(5000, 500 * 2 ** retry++));
       };
     }
     open();
     // Los móviles cortan la conexión al bloquear la pantalla: reconectar al volver.
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && ws.readyState > 1) open();
+      if (!document.hidden && !stopped && ws.readyState > 1) open();
     });
     return {
       send(obj) {
         if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+      },
+      /** Corta la conexión y deja de reintentar (por ejemplo, si el servidor nos ha rechazado). */
+      stop() {
+        stopped = true;
+        clearTimeout(timer);
+        if (ws) ws.close();
       },
     };
   }
@@ -362,8 +369,46 @@ const P = (() => {
     ctx.restore();
   }
 
-  /** Movimiento propuesto: línea discontinua + ficha fantasma en el destino. */
-  function drawProposal(view, t, from, to, grid) {
+  const fmtNum = (v) => String(Math.round(v * 10) / 10).replace('.', ',');
+
+  /** «6 casillas · 9 m» para una distancia en píxeles del mapa. */
+  function distLabel(scene, px) {
+    const cells = px / scene.gridSize;
+    const txt = fmtNum(cells) + (Math.abs(cells - 1) < 0.05 ? ' casilla' : ' casillas');
+    return scene.unit ? `${txt} · ${fmtNum(cells * scene.cellDistance)} ${scene.unit}` : txt;
+  }
+
+  /** Texto con borde oscuro, de tamaño constante en pantalla. */
+  function drawLabel(view, text, x, y, color) {
+    const ctx = view.ctx, z = view.cam.zoom;
+    ctx.save();
+    ctx.font = `700 ${13 / z}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4 / z;
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = color || '#fff';
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+
+  /** Aro que marca de quién es el turno. */
+  function drawTurnRing(view, t, pos, grid) {
+    const ctx = view.ctx, z = view.cam.zoom;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, Vision.tokenRadius(t, grid) + 9 / z, 0, TAU);
+    ctx.setLineDash([7 / z, 5 / z]);
+    ctx.lineWidth = 3 / z;
+    ctx.strokeStyle = '#ffd54a';
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Movimiento propuesto: línea discontinua + ficha fantasma en el destino. label: texto opcional (distancia). */
+  function drawProposal(view, t, from, to, grid, label) {
     const ctx = view.ctx, z = view.cam.zoom;
     const r = Vision.tokenRadius(t, grid);
     ctx.save();
@@ -386,6 +431,7 @@ const P = (() => {
     ctx.fillStyle = t.color;
     ctx.fill();
     ctx.restore();
+    if (label) drawLabel(view, label, to.x, to.y - r - 6 / z);
   }
 
   /* ---------- Memoria de lo explorado ---------- */
@@ -563,5 +609,5 @@ const P = (() => {
     ctx.restore();
   }
 
-  return { TAU, BIG, qs, esc, connect, View, attachInput, scheduler, Animator, image, polyPath, piePath, drawBackdrop, drawToken, drawProposal, exploredMask, Fog, drawFog };
+  return { TAU, BIG, qs, esc, connect, View, attachInput, scheduler, Animator, image, polyPath, piePath, drawBackdrop, drawToken, drawProposal, drawLabel, drawTurnRing, distLabel, fmtNum, exploredMask, Fog, drawFog };
 })();

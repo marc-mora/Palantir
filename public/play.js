@@ -6,6 +6,9 @@
   const code = (P.qs.get('room') || '').toUpperCase();
   const tokenId = P.qs.get('token') || '';
   const $ = (id) => document.getElementById(id);
+  // El personaje queda ligado a este dispositivo con un secreto que guarda el navegador.
+  const SECRET_KEY = `palantir.pc.${code}.${tokenId}`;
+  const stored = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 
   const view = new P.View($('c'));
   const fog = new P.Fog(view);
@@ -23,12 +26,20 @@
     redraw();
   };
 
-  const conn = P.connect(() => ({ t: 'hello', room: code, role, tokenId }), {
+  const conn = P.connect(() => ({ t: 'hello', room: code, role, tokenId, secret: stored(SECRET_KEY), key: P.qs.get('k') }), {
     onStatus(on) {
       $('status').classList.toggle('on', on);
     },
     onMessage(m) {
-      if (m.t === 'error') return showOverlay(m.msg);
+      if (m.t === 'error') {
+        conn.stop(); // nos han rechazado: no tiene sentido reintentar
+        return showOverlay(m.msg);
+      }
+      if (m.t === 'claim') {
+        try { localStorage.setItem(SECRET_KEY, m.secret); } catch { /* sin almacenamiento: habrá que liberar el personaje al recargar */ }
+        return;
+      }
+      if (m.t === 'notice') return toast(m.msg);
       if (m.t === 'cam' && S) {
         S.partyCam = m.rect;
         if (follow) frameParty();
@@ -74,13 +85,36 @@
     view.fit(S.partyCam || { x: 0, y: 0, w: S.scene.width, h: S.scene.height }, S.partyCam ? 0 : 20);
   }
 
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => el.classList.add('hidden'), 3000);
+  }
+
   function showOverlay(msg) {
     $('overlayMsg').textContent = msg;
     $('back').href = '/?room=' + encodeURIComponent(code);
     $('overlay').classList.remove('hidden');
   }
 
+  function updateTurn() {
+    const c = S.combat, el = $('turn');
+    el.classList.toggle('hidden', !c);
+    if (!c) return;
+    const mine = !!(c.turn && S.me && c.turn.id === S.me);
+    el.classList.toggle('mine', mine);
+    let txt = 'Ronda ' + c.round + ' · ';
+    if (!c.turn) txt += 'preparando iniciativa';
+    else if (mine) txt += '¡tu turno!';
+    else txt += c.turn.hidden ? 'turno de alguien que no ves' : 'turno de ' + c.turn.name;
+    if (c.budget !== null && c.budget !== undefined) txt += ' · te quedan ' + P.fmtNum(c.budget) + ' casillas';
+    el.textContent = txt;
+  }
+
   function updateHud() {
+    updateTurn();
     if (role !== 'player') return;
     const m = me();
     if (!m) return showOverlay('Tu personaje ya no está en la partida. Pide al máster que lo cree y vuelve a entrar.');
@@ -147,11 +181,28 @@
     P.drawFog(view, fog.render(env, viewers, memory), 1);
 
     view.applyWorld(view.ctx);
+    const ctx = view.ctx, z = view.cam.zoom;
+    // En combate: hasta dónde puede llegar todavía este turno.
+    if (role === 'player' && S.combat && S.combat.budget !== null && viewers[0]) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(viewers[0].x, viewers[0].y, S.combat.budget * g, 0, P.TAU);
+      ctx.setLineDash([10 / z, 8 / z]);
+      ctx.lineWidth = 2 / z;
+      ctx.strokeStyle = 'rgba(255, 213, 74, 0.85)';
+      ctx.stroke();
+      ctx.restore();
+    }
     for (const v of viewers) {
       const p = S.proposals[v.id];
-      if (p) P.drawProposal(view, v, v, p, g);
+      if (p) P.drawProposal(view, v, v, p, g, P.distLabel(scene, Math.hypot(p.x - v.x, p.y - v.y)));
     }
-    for (const t of S.tokens) P.drawToken(view, t, anim.pos(t), g, { me: t.id === S.me });
+    const turnId = S.combat && S.combat.turn ? S.combat.turn.id : null;
+    for (const t of S.tokens) {
+      const pos = anim.pos(t);
+      if (t.id === turnId) P.drawTurnRing(view, t, pos, g);
+      P.drawToken(view, t, pos, g, { me: t.id === S.me });
+    }
 
     if (anim.active) redraw();
   }

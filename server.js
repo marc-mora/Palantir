@@ -29,12 +29,14 @@ const MAPS_DIR = path.join(DATA_DIR, 'maps');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_MAP_BYTES = 60 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
+const MAX_BACKUP_BYTES = 400 * 1024 * 1024;
 const MAX_WALLS = 20000;
 const MAX_SCENES = 60;
 const DEFAULT_PC_ANGLE = 180; // grados de campo de visión de un jugador recién creado
 // Datos del personaje (iguales en todas las escenas). Posición, orientación y
 // ocultación son propias de cada escena.
-const CHAR_FIELDS = ['name', 'color', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light'];
+const CHAR_FIELDS = ['name', 'color', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light', 'speed'];
+const DEFAULT_SPEED = 6; // casillas por turno
 
 fs.mkdirSync(ROOMS_DIR, { recursive: true });
 fs.mkdirSync(MAPS_DIR, { recursive: true });
@@ -57,6 +59,8 @@ function newId() {
   return crypto.randomBytes(6).toString('hex');
 }
 
+const newSecret = () => crypto.randomBytes(16).toString('hex');
+
 function newCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (;;) {
@@ -70,7 +74,7 @@ function blankScene(name) {
   return {
     id: newId(),
     name,
-    scene: { map: null, width: 2100, height: 1400, gridSize: 70, showGrid: true, dark: false, alliesAlwaysVisible: true },
+    scene: { map: null, width: 2100, height: 1400, gridSize: 70, showGrid: true, dark: false, alliesAlwaysVisible: true, cellDistance: 1.5, unit: 'm' },
     walls: [],
     lights: [],
     tokens: [],
@@ -80,6 +84,7 @@ function blankScene(name) {
     fogRev: 0,
     wallsRev: 0,
     start: null, // punto de inicio para «Reiniciar»: { at, tokens, doors }
+    combat: null, // { round, turnId, inits:{id:n}, moved:{id:casillas} }
   };
 }
 
@@ -88,7 +93,11 @@ const activeScene = (room) => sceneById(room, room.activeSceneId) || room.scenes
 
 function createRoom() {
   const first = blankScene('Escena 1');
-  const room = { code: newCode(), gmKey: crypto.randomBytes(16).toString('hex'), scenes: [first], activeSceneId: first.id, partyCam: null };
+  const room = {
+    code: newCode(), gmKey: newSecret(), partyKey: newSecret().slice(0, 12),
+    scenes: [first], activeSceneId: first.id, partyCam: null,
+    claims: {}, // pcId -> secreto del dispositivo que lleva ese personaje
+  };
   rooms.set(room.code, room);
   save(room);
   return room;
@@ -134,6 +143,7 @@ function resetScene(sc) {
   sc.proposals = {};
   sc.explored = {};
   sc.fogRev++;
+  sc.combat = null;
 }
 
 function unlinkMap(url) {
@@ -189,8 +199,12 @@ function migrate(room) {
   for (const sc of room.scenes) {
     const blank = blankScene('');
     for (const k of Object.keys(blank)) if (!(k in sc)) sc[k] = blank[k];
+    for (const k of Object.keys(blank.scene)) if (!(k in sc.scene)) sc.scene[k] = blank.scene[k];
+    for (const t of sc.tokens) if (!('speed' in t)) t.speed = DEFAULT_SPEED;
   }
   if (!sceneById(room, room.activeSceneId)) room.activeSceneId = room.scenes[0].id;
+  if (!room.partyKey) room.partyKey = newSecret().slice(0, 12);
+  if (!room.claims || typeof room.claims !== 'object') room.claims = {};
 }
 
 function loadRooms() {
@@ -232,9 +246,12 @@ function mapUrlOk(room, url) {
 }
 
 function pushWall(sc, x1, y1, x2, y2, type, open) {
-  if (sc.walls.length >= MAX_WALLS) return;
-  const w = { id: newId(), x1: coord(x1), y1: coord(y1), x2: coord(x2), y2: coord(y2), type: type === 'door' ? 'door' : 'wall', open: !!open };
-  if (Math.hypot(w.x2 - w.x1, w.y2 - w.y1) >= 2) sc.walls.push(w);
+  if (sc.walls.length >= MAX_WALLS) return null;
+  type = type === 'door' || type === 'window' ? type : 'wall';
+  const w = { id: newId(), x1: coord(x1), y1: coord(y1), x2: coord(x2), y2: coord(y2), type, open: type === 'door' && !!open };
+  if (Math.hypot(w.x2 - w.x1, w.y2 - w.y1) < 2) return null;
+  sc.walls.push(w);
+  return w;
 }
 
 function applyTokenPatch(t, p) {
@@ -251,6 +268,7 @@ function applyTokenPatch(t, p) {
   if ('darkvision' in p) t.darkvision = num(p.darkvision, t.darkvision, 0, 1000);
   if ('truesight' in p) t.truesight = num(p.truesight, t.truesight, 0, 1000);
   if ('light' in p) t.light = num(p.light, t.light, 0, 1000);
+  if ('speed' in p) t.speed = num(p.speed, t.speed, 0, 1000);
   if ('hidden' in p) t.hidden = !!p.hidden;
   if ('invisible' in p) t.invisible = !!p.invisible;
 }
@@ -266,14 +284,220 @@ function moveToken(sc, t, x, y) {
   delete sc.proposals[t.id];
 }
 
+/** Ejecuta un movimiento propuesto y, en combate, lo descuenta del movimiento del turno. */
+function approveMove(sc, t, p) {
+  if (sc.combat && t.id in sc.combat.inits) {
+    sc.combat.moved[t.id] = (sc.combat.moved[t.id] || 0) + Math.hypot(p.x - t.x, p.y - t.y) / sc.scene.gridSize;
+  }
+  moveToken(sc, t, p.x, p.y);
+}
+
 function removePcEverywhere(room, id, except) {
   for (const s of room.scenes) {
     if (s === except) continue;
     s.tokens = s.tokens.filter((t) => !(t.id === id && t.kind === 'pc'));
     delete s.proposals[id];
     delete s.explored[id];
+    combatDrop(s, id);
     if (s.start) s.start.tokens = s.start.tokens.filter((t) => t.id !== id);
   }
+  delete room.claims[id];
+}
+
+/* ---------- Combate: iniciativa, turnos y movimiento por turno ---------- */
+
+/** Participantes en orden de iniciativa (a igualdad, primero los jugadores). */
+function combatOrder(sc) {
+  if (!sc.combat) return [];
+  const inits = sc.combat.inits;
+  return sc.tokens
+    .filter((t) => t.id in inits)
+    .sort((a, b) => inits[b.id] - inits[a.id] || (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'pc' ? -1 : 1));
+}
+
+function combatNext(sc) {
+  const c = sc.combat, order = combatOrder(sc);
+  if (!c || !order.length) return;
+  let i = order.findIndex((t) => t.id === c.turnId) + 1;
+  if (i >= order.length) {
+    i = 0;
+    if (c.turnId) c.round++;
+  }
+  c.turnId = order[i].id;
+  c.moved[c.turnId] = 0; // al empezar su turno recupera todo su movimiento
+}
+
+function combatDrop(sc, id) {
+  const c = sc.combat;
+  if (!c || !(id in c.inits)) return;
+  if (c.turnId === id) {
+    // Si era su turno, pasa al siguiente antes de quitarlo.
+    combatNext(sc);
+    if (c.turnId === id) c.turnId = null;
+  }
+  delete c.inits[id];
+  delete c.moved[id];
+}
+
+/** Casillas que le quedan por mover este turno, o null si no hay límite. */
+function budgetOf(sc, t) {
+  if (!sc.combat || !(t.speed > 0) || !(t.id in sc.combat.inits)) return null;
+  return Math.max(0, t.speed - (sc.combat.moved[t.id] || 0));
+}
+
+/**
+ * Ajusta el destino que pide un jugador: no más lejos de lo que le queda este turno
+ * y sin atravesar muros, puertas cerradas ni ventanas (se queda delante).
+ * Devuelve { x, y, why } donde why explica el recorte, si lo hubo.
+ */
+function clampMove(sc, t, x, y) {
+  const g = sc.scene.gridSize;
+  let dx = x - t.x, dy = y - t.y, d = Math.hypot(dx, dy), why = null;
+  if (d < 1) return { x: t.x, y: t.y, why: null };
+  const budget = budgetOf(sc, t);
+  if (budget !== null && d > budget * g) {
+    const k = (budget * g) / d;
+    dx *= k; dy *= k; d = budget * g;
+    why = budget > 0 ? 'limit' : 'spent';
+  }
+  if (d >= 1) {
+    const hit = Vision.firstHit(t.x, t.y, t.x + dx, t.y + dy, Vision.blockingMove(sc.walls));
+    if (hit < 1) {
+      const stop = Math.max(0, hit * d - Vision.tokenRadius(t, g));
+      dx *= stop / d; dy *= stop / d;
+      why = 'wall';
+    }
+  }
+  return { x: t.x + dx, y: t.y + dy, why };
+}
+
+/* ---------- Copias: duplicar escenas y exportar/importar partidas ---------- */
+
+const ID_RE = /^[a-f0-9]{12}$/;
+const keepId = (v) => (typeof v === 'string' && ID_RE.test(v) ? v : newId());
+
+function blankToken() {
+  return {
+    id: newId(), name: 'Ficha', kind: 'npc', color: '#8b1e1e', x: 0, y: 0, facing: 0, size: 1,
+    range: 0, angle: 360, darkvision: 0, truesight: 0, light: 0, speed: DEFAULT_SPEED, hidden: false, invisible: false,
+  };
+}
+
+function cleanToken(raw) {
+  const t = blankToken();
+  if (raw && typeof raw === 'object') {
+    t.id = keepId(raw.id);
+    applyTokenPatch(t, raw);
+  }
+  return t;
+}
+
+/** Reconstruye una escena a partir de datos no fiables (una copia de seguridad), campo a campo. */
+function cleanScene(raw, mapUrl) {
+  raw = raw && typeof raw === 'object' ? raw : {};
+  const sc = blankScene(str(raw.name, 'Escena', 60));
+  sc.id = keepId(raw.id);
+  const s = sc.scene, rs = raw.scene && typeof raw.scene === 'object' ? raw.scene : {};
+  s.map = mapUrl(rs.map);
+  s.width = num(rs.width, s.width, 50, 20000);
+  s.height = num(rs.height, s.height, 50, 20000);
+  s.gridSize = num(rs.gridSize, s.gridSize, 10, 500);
+  s.cellDistance = num(rs.cellDistance, s.cellDistance, 0.01, 10000);
+  s.unit = str(rs.unit, s.unit, 8);
+  for (const k of ['showGrid', 'dark', 'alliesAlwaysVisible']) if (k in rs) s[k] = !!rs[k];
+  for (const w of Array.isArray(raw.walls) ? raw.walls : []) {
+    if (!w || typeof w !== 'object') continue;
+    const wall = pushWall(sc, w.x1, w.y1, w.x2, w.y2, w.type, w.open);
+    if (wall) wall.id = keepId(w.id);
+  }
+  for (const l of (Array.isArray(raw.lights) ? raw.lights : []).slice(0, 2000)) {
+    if (l && typeof l === 'object') sc.lights.push({ id: keepId(l.id), x: coord(l.x), y: coord(l.y), radius: num(l.radius, 6, 0.5, 200) });
+  }
+  const seen = new Set();
+  for (const r of (Array.isArray(raw.tokens) ? raw.tokens : []).slice(0, 300)) {
+    const t = cleanToken(r);
+    if (!seen.has(t.id)) sc.tokens.push(t);
+    seen.add(t.id);
+  }
+  if (raw.explored && typeof raw.explored === 'object') {
+    for (const [id, b64] of Object.entries(raw.explored)) {
+      if (ID_RE.test(id) && typeof b64 === 'string' && b64.length < 60000 && /^[A-Za-z0-9+/=]*$/.test(b64)) sc.explored[id] = b64;
+    }
+    sc.fogSpec = str(raw.fogSpec, '', 40);
+  }
+  const st = raw.start;
+  if (st && typeof st === 'object' && Array.isArray(st.tokens)) {
+    const doors = {};
+    if (st.doors && typeof st.doors === 'object') for (const [id, open] of Object.entries(st.doors)) if (ID_RE.test(id)) doors[id] = !!open;
+    sc.start = { at: num(st.at, Date.now(), 0, 1e14), tokens: st.tokens.slice(0, 300).map(cleanToken), doors };
+  }
+  return sc;
+}
+
+function copyMap(room, url) {
+  if (!url) return null;
+  const ext = path.extname(url).slice(1);
+  const name = `${room.code}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
+  try {
+    fs.copyFileSync(path.join(MAPS_DIR, path.basename(url)), path.join(MAPS_DIR, name));
+    return '/maps/' + name;
+  } catch {
+    return null;
+  }
+}
+
+/** Copia de una escena lista para volver a jugarse: mismo mapa, muros y fichas; sin explorar ni empezar. */
+function duplicateScene(room, src) {
+  const sc = cleanScene(JSON.parse(JSON.stringify(src)), () => null);
+  sc.id = newId();
+  sc.name = (src.name + ' (copia)').slice(0, 60);
+  sc.scene.map = copyMap(room, src.scene.map);
+  sc.explored = {};
+  sc.fogSpec = '';
+  sc.start = null;
+  return sc;
+}
+
+/** Partida entera en un solo objeto, con las imágenes de los mapas dentro. */
+function exportRoom(room) {
+  const maps = {};
+  for (const sc of room.scenes) {
+    const url = sc.scene.map;
+    if (!url || maps[url]) continue;
+    try {
+      maps[url] = fs.readFileSync(path.join(MAPS_DIR, path.basename(url))).toString('base64');
+    } catch { /* mapa perdido: la escena se exporta sin imagen */ }
+  }
+  return { format: 'palantir-backup', version: 1, exportedAt: new Date().toISOString(), activeSceneId: room.activeSceneId, scenes: room.scenes, maps };
+}
+
+/** Crea una partida nueva (código y claves nuevos) a partir de una copia de seguridad. */
+function importRoom(data) {
+  if (!data || data.format !== 'palantir-backup' || !Array.isArray(data.scenes) || !data.scenes.length) return null;
+  const room = { code: newCode(), gmKey: newSecret(), partyKey: newSecret().slice(0, 12), scenes: [], activeSceneId: null, partyCam: null, claims: {} };
+  const written = new Map();
+  const mapUrl = (old) => {
+    if (typeof old !== 'string' || !data.maps || typeof data.maps[old] !== 'string') return null;
+    if (written.has(old)) return written.get(old);
+    const ext = (old.match(/\.(png|jpg|webp)$/) || [])[1];
+    if (!ext) return null;
+    const name = `${room.code}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
+    fs.writeFileSync(path.join(MAPS_DIR, name), Buffer.from(data.maps[old], 'base64'));
+    written.set(old, '/maps/' + name);
+    return '/maps/' + name;
+  };
+  const ids = new Set();
+  for (const raw of data.scenes.slice(0, MAX_SCENES)) {
+    const sc = cleanScene(raw, mapUrl);
+    if (ids.has(sc.id)) sc.id = newId();
+    ids.add(sc.id);
+    if (raw && raw.id === data.activeSceneId) room.activeSceneId = sc.id;
+    room.scenes.push(sc);
+  }
+  if (!room.activeSceneId) room.activeSceneId = room.scenes[0].id;
+  rooms.set(room.code, room);
+  save(room);
+  return room;
 }
 
 function addPcEverywhere(room, t, except) {
@@ -331,6 +555,46 @@ function gmOp(room, ws, m) {
       if (s) resetScene(s);
       break;
     }
+    case 'dupScene': {
+      const s = target();
+      if (!s || room.scenes.length >= MAX_SCENES) return;
+      room.scenes.splice(room.scenes.indexOf(s) + 1, 0, duplicateScene(room, s));
+      break;
+    }
+
+    /* --- Combate --- */
+    case 'combatStart':
+      sc.combat = { round: 1, turnId: null, inits: {}, moved: {} };
+      for (const t of sc.tokens) sc.combat.inits[t.id] = 0;
+      break;
+    case 'combatEnd':
+      sc.combat = null;
+      break;
+    case 'combatInit':
+      if (sc.combat && token()) sc.combat.inits[m.id] = Math.round(num(m.init, 0, -99, 999));
+      break;
+    case 'combatToggle':
+      if (!sc.combat || !token()) return;
+      if (m.id in sc.combat.inits) combatDrop(sc, m.id);
+      else sc.combat.inits[m.id] = 0;
+      break;
+    case 'combatNext':
+      combatNext(sc);
+      break;
+
+    /* --- Dispositivos --- */
+    case 'release': {
+      delete room.claims[m.id];
+      for (const c of rt(room).clients) {
+        if (c.meta.role === 'player' && c.meta.tokenId === m.id) {
+          send(c, { t: 'error', code: 'taken', msg: 'El máster ha liberado este personaje. Vuelve a entrar con el código de la partida.' });
+          rt(room).clients.delete(c);
+          c.meta = null;
+          c.close();
+        }
+      }
+      break;
+    }
     case 'setStart': {
       const s = target();
       if (!s) return;
@@ -348,6 +612,8 @@ function gmOp(room, ws, m) {
       if ('showGrid' in p) s.showGrid = !!p.showGrid;
       if ('dark' in p) s.dark = !!p.dark;
       if ('alliesAlwaysVisible' in p) s.alliesAlwaysVisible = !!p.alliesAlwaysVisible;
+      if ('cellDistance' in p) s.cellDistance = num(p.cellDistance, s.cellDistance, 0.01, 10000);
+      if ('unit' in p) s.unit = typeof p.unit === 'string' ? p.unit.trim().slice(0, 8) : s.unit;
       break;
     }
     case 'setMap': {
@@ -365,7 +631,7 @@ function gmOp(room, ws, m) {
     }
     case 'addWalls':
       if (!Array.isArray(m.walls)) return;
-      for (const w of m.walls.slice(0, 500)) if (w) pushWall(sc, w.x1, w.y1, w.x2, w.y2, w.type, false);
+      for (const w of m.walls.slice(0, 500)) if (w && typeof w === 'object') pushWall(sc, w.x1, w.y1, w.x2, w.y2, w.type, false);
       sc.wallsRev++;
       break;
     case 'delWall':
@@ -407,9 +673,11 @@ function gmOp(room, ws, m) {
         facing: 0, size: 1,
         // Un personaje no ve lo que tiene a la espalda: por defecto, medio círculo hacia donde mira.
         range: 0, angle: kind === 'pc' ? DEFAULT_PC_ANGLE : 360, darkvision: 0, truesight: 0, light: 0,
+        speed: DEFAULT_SPEED,
         hidden: false, invisible: false,
       };
       sc.tokens.push(t);
+      if (sc.combat) sc.combat.inits[t.id] = 0; // quien llega en mitad del combate entra en la lista
       if (kind === 'pc') addPcEverywhere(room, t, sc);
       break;
     }
@@ -432,6 +700,7 @@ function gmOp(room, ws, m) {
     case 'delToken': {
       const t = token();
       if (!t) return;
+      combatDrop(sc, t.id);
       sc.tokens = sc.tokens.filter((x) => x !== t);
       delete sc.proposals[t.id];
       if (t.kind === 'pc') {
@@ -452,7 +721,7 @@ function gmOp(room, ws, m) {
     }
     case 'approve': {
       const t = token(), p = sc.proposals[m.id];
-      if (t && p) moveToken(sc, t, p.x, p.y);
+      if (t && p) approveMove(sc, t, p);
       break;
     }
     case 'reject':
@@ -461,7 +730,7 @@ function gmOp(room, ws, m) {
     case 'approveAll':
       for (const t of sc.tokens) {
         const p = sc.proposals[t.id];
-        if (p) moveToken(sc, t, p.x, p.y);
+        if (p) approveMove(sc, t, p);
       }
       sc.proposals = {};
       break;
@@ -538,7 +807,7 @@ function publicToken(t) {
 function viewerToken(t) {
   return {
     id: t.id, name: t.name, color: t.color, x: t.x, y: t.y, facing: t.facing, size: t.size,
-    range: t.range, angle: t.angle, darkvision: t.darkvision, truesight: t.truesight, light: t.light,
+    range: t.range, angle: t.angle, darkvision: t.darkvision, truesight: t.truesight, light: t.light, speed: t.speed,
   };
 }
 
@@ -582,6 +851,9 @@ function sendState(ws, room) {
     view.scenes = room.scenes.map(sceneSummary);
     view.activeSceneId = active.id;
     view.startAt = sc.start ? sc.start.at : null;
+    view.combat = sc.combat ? { ...sc.combat, order: combatOrder(sc).map((t) => t.id) } : null;
+    view.claimed = Object.keys(room.claims);
+    view.partyKey = room.partyKey;
     if (sendWalls) view.walls = sc.walls;
     if (sendFog) view.explored = sc.start ? { ...fogHead, by: sc.explored } : null;
     return send(ws, view);
@@ -604,6 +876,18 @@ function sendState(ws, room) {
   view.viewers = viewers.map(viewerToken);
   view.tokens = tokens.map(publicToken);
   view.me = meta.role === 'player' && viewers[0] ? viewers[0].id : null;
+  if (sc.combat) {
+    // Del orden de iniciativa solo se enseña a quien el jugador puede ver.
+    const shown = new Set(tokens.map((t) => t.id));
+    const brief = (t) => ({ id: t.id, name: t.name, color: t.color, kind: t.kind });
+    const turn = sc.tokens.find((t) => t.id === sc.combat.turnId);
+    view.combat = {
+      round: sc.combat.round,
+      order: combatOrder(sc).filter((t) => shown.has(t.id)).map(brief),
+      turn: !turn ? null : shown.has(turn.id) ? brief(turn) : { hidden: true },
+      budget: view.me ? budgetOf(sc, viewers[0]) : null,
+    };
+  } else view.combat = null;
   if (sendWalls) view.segs = env.segs.map((w) => ({ x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 }));
   if (sendFog) {
     const bits = meta.role === 'party' ? Fog.union(viewers.map((v) => sc.explored[v.id]), sp) : (viewers[0] && sc.explored[viewers[0].id]) || null;
@@ -695,7 +979,8 @@ function importScene(room, data) {
   s.dark = !!data.dark;
   s.showGrid = false; // los mapas de Dungeondraft ya suelen llevar la cuadrícula dibujada
   for (const w of Array.isArray(data.walls) ? data.walls : []) if (Array.isArray(w)) pushWall(sc, w[0], w[1], w[2], w[3], 'wall', false);
-  for (const d of Array.isArray(data.doors) ? data.doors : []) if (Array.isArray(d)) pushWall(sc, d[0], d[1], d[2], d[3], 'door', d[4]);
+  for (const d of Array.isArray(data.doors) ? data.doors : []) if (Array.isArray(d)) pushWall(sc, d[0], d[1], d[2], d[3], 'door', false);
+  for (const w of Array.isArray(data.windows) ? data.windows : []) if (Array.isArray(w)) pushWall(sc, w[0], w[1], w[2], w[3], 'window', false);
   for (const l of (Array.isArray(data.lights) ? data.lights : []).slice(0, 2000)) {
     if (Array.isArray(l)) sc.lights.push({ id: newId(), x: coord(l[0]), y: coord(l[1]), radius: num(l[2], 6, 0.5, 200) });
   }
@@ -719,8 +1004,29 @@ async function handle(req, res) {
   if (m && req.method === 'GET') {
     const room = rooms.get(m[1].toUpperCase());
     if (!room) return json(res, 404, { error: 'No existe esa partida' });
-    const pcs = activeScene(room).tokens.filter((t) => t.kind === 'pc').map((t) => ({ id: t.id, name: t.name, color: t.color }));
+    const pcs = activeScene(room).tokens.filter((t) => t.kind === 'pc').map((t) => ({ id: t.id, name: t.name, color: t.color, taken: t.id in room.claims }));
     return json(res, 200, { code: room.code, pcs });
+  }
+
+  m = p.match(/^\/api\/rooms\/([A-Za-z0-9]{1,12})\/export$/);
+  if (m && req.method === 'GET') {
+    const room = rooms.get(m[1].toUpperCase());
+    if (!room) return json(res, 404, { error: 'No existe esa partida' });
+    if (req.headers['x-gm-key'] !== room.gmKey) return json(res, 403, { error: 'Clave de máster incorrecta' });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(exportRoom(room)));
+  }
+
+  if (p === '/api/import' && req.method === 'POST') {
+    let data;
+    try {
+      data = JSON.parse((await readBody(req, MAX_BACKUP_BYTES)).toString('utf8'));
+    } catch {
+      return json(res, 400, { error: 'El archivo no es una copia de seguridad de Palantir' });
+    }
+    const room = importRoom(data);
+    if (!room) return json(res, 400, { error: 'El archivo no es una copia de seguridad de Palantir' });
+    return json(res, 200, { code: room.code, gmKey: room.gmKey });
   }
 
   m = p.match(/^\/api\/rooms\/([A-Za-z0-9]{1,12})\/(map|scenes)$/);
@@ -802,7 +1108,22 @@ wss.on('connection', (ws) => {
       if (!room) return send(ws, { t: 'error', code: 'no-room', msg: 'No existe esa partida' });
       const role = m.role === 'gm' ? 'gm' : m.role === 'party' ? 'party' : 'player';
       if (role === 'gm' && m.key !== room.gmKey) return send(ws, { t: 'error', code: 'bad-key', msg: 'Clave de máster incorrecta' });
-      ws.meta = { code: room.code, role, tokenId: role === 'player' ? String(m.tokenId || '') : null, sceneId: null, wallsKey: null, fogKey: null };
+      if (role === 'party' && m.key !== room.partyKey) {
+        return send(ws, { t: 'error', code: 'bad-key', msg: 'La pantalla de party se abre con el enlace que tiene el máster.' });
+      }
+      const tokenId = role === 'player' ? String(m.tokenId || '') : null;
+      if (role === 'player' && room.scenes.some((s) => s.tokens.some((t) => t.id === tokenId && t.kind === 'pc'))) {
+        // Cada personaje queda ligado al primer dispositivo que lo abre.
+        const owner = room.claims[tokenId];
+        if (owner && owner !== m.secret) {
+          return send(ws, { t: 'error', code: 'taken', msg: 'Este personaje ya lo lleva otro dispositivo. Si es el tuyo, pide al máster que lo libere.' });
+        }
+        if (!owner) {
+          room.claims[tokenId] = newSecret();
+          send(ws, { t: 'claim', tokenId, secret: room.claims[tokenId] });
+        }
+      }
+      ws.meta = { code: room.code, role, tokenId, sceneId: null, wallsKey: null, fogKey: null };
       rt(room).clients.add(ws);
       if (role === 'gm') broadcast(room);
       else changed(room); // la entrada de un jugador puede dar comienzo a la escena
@@ -833,8 +1154,13 @@ wss.on('connection', (ws) => {
       const t = sc.tokens.find((x) => x.id === ws.meta.tokenId && x.kind === 'pc');
       if (!t) return;
       if (m.t === 'propose') {
-        sc.proposals[t.id] = { x: num(m.x, t.x, -COORD, COORD), y: num(m.y, t.y, -COORD, COORD) };
-        changed(room);
+        const c = clampMove(sc, t, num(m.x, t.x, -COORD, COORD), num(m.y, t.y, -COORD, COORD));
+        const moved = Math.hypot(c.x - t.x, c.y - t.y) >= 2;
+        if (moved) sc.proposals[t.id] = { x: c.x, y: c.y };
+        if (c.why === 'spent') send(ws, { t: 'notice', msg: 'No te queda movimiento este turno.' });
+        else if (c.why === 'wall' && !moved) send(ws, { t: 'notice', msg: 'No puedes avanzar por ahí: hay un muro.' });
+        else if (c.why === 'wall') send(ws, { t: 'notice', msg: 'Hay un muro en medio: llegas hasta él.' });
+        if (moved) changed(room);
       } else if (m.t === 'cancel') {
         delete sc.proposals[t.id];
         changed(room);

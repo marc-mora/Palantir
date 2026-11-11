@@ -15,9 +15,31 @@
 
   const TAU = Math.PI * 2;
 
-  /** Paredes que bloquean la vista: todas menos las puertas abiertas. */
+  /** Paredes que bloquean la vista: muros y puertas cerradas. Las ventanas dejan ver. */
   function blocking(walls) {
+    return walls.filter((w) => w.type === 'wall' || (w.type === 'door' && !w.open));
+  }
+
+  /** Paredes que impiden el paso: todo menos las puertas abiertas (las ventanas también frenan). */
+  function blockingMove(walls) {
     return walls.filter((w) => !(w.type === 'door' && w.open));
+  }
+
+  /** Fracción (0..1] del trayecto A→B en la que se choca con la primera pared; 1 si no hay ninguna. */
+  function firstHit(ax, ay, bx, by, segs) {
+    const rx = bx - ax, ry = by - ay;
+    let best = 1;
+    for (let i = 0; i < segs.length; i++) {
+      const w = segs[i];
+      const sx = w.x2 - w.x1, sy = w.y2 - w.y1;
+      const den = rx * sy - ry * sx;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((w.x1 - ax) * sy - (w.y1 - ay) * sx) / den;
+      if (t <= 1e-9 || t >= best) continue;
+      const u = ((w.x1 - ax) * ry - (w.y1 - ay) * rx) / den;
+      if (u >= 0 && u <= 1) best = t;
+    }
+    return best;
   }
 
   /** ¿El segmento A→B cruza la pared w? */
@@ -259,7 +281,7 @@
   }
 
   return {
-    TAU, blocking, segHit, los, angleDiff, distPointSeg, visibilityPolygon,
+    TAU, blocking, blockingMove, firstHit, segHit, los, angleDiff, distPointSeg, visibilityPolygon,
     pointInPolygon, tokenRadius, collectLights, withinSight, pointVisible, tokenVisible,
   };
 });

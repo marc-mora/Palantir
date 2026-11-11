@@ -138,3 +138,20 @@ test('con cientos de muros el polígono sigue coincidiendo con pointVisible (con
   assert.ok(checked > 3000, 'se han comprobado suficientes puntos: ' + checked);
   assert.equal(mismatches, 0);
 });
+
+test('una ventana deja ver pero impide el paso; una puerta abierta, ninguna de las dos cosas', () => {
+  const win = { ...wall(200, 0, 200, 200), type: 'window' };
+  const door = { ...wall(200, 0, 200, 200), type: 'door', open: true };
+  assert.equal(V.pointVisible(viewer(), 300, 100, env([win])), true);
+  assert.equal(V.blockingMove([win]).length, 1);
+  assert.equal(V.blockingMove([door]).length, 0);
+  door.open = false;
+  assert.equal(V.blockingMove([door]).length, 1);
+});
+
+test('firstHit devuelve en qué punto del trayecto se choca', () => {
+  const segs = [wall(200, 0, 200, 200), wall(300, 0, 300, 200)];
+  assert.ok(Math.abs(V.firstHit(100, 100, 500, 100, segs) - 0.25) < 1e-9);
+  assert.equal(V.firstHit(100, 100, 150, 100, segs), 1);
+  assert.equal(V.firstHit(100, 300, 500, 300, segs), 1); // pasa por debajo
+});

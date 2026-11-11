@@ -36,9 +36,10 @@ test('simplifica vértices innecesarios y trae los objetos', () => {
   assert.equal(r.walls.length, 2 + 1 + 4);
 });
 
-test('puertas: closed:false entra como puerta abierta', () => {
+test('portales: closed:true es una puerta y closed:false una ventana', () => {
   const r = Uvtt.parse(sample());
-  assert.deepEqual(r.doors, [[500, 250, 500, 350, false], [225, 0, 275, 0, true]]);
+  assert.deepEqual(r.doors, [[500, 250, 500, 350]]);
+  assert.deepEqual(r.windows, [[225, 0, 275, 0]]);
 });
 
 test('luces con su alcance en casillas; las de alcance 0 se descartan', () => {
