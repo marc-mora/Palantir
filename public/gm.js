@@ -692,11 +692,13 @@
   $('newPc').onclick = () => newSheet('pc');
   $('newNpc').onclick = () => newSheet('npc');
   $('openSheets').onclick = () => openSheets();
+  $('scenesSheets').onclick = () => openSheets(); // también desde la pantalla de escenas, sin entrar en ninguna
   $('closeSheets').onclick = closeSheets;
   $('sheetSpawn').onclick = () => {
     if (!sheet || sheet.type !== 'roster') return;
     const id = sheet.id;
     closeSheets();
+    showScenes(false); // por si se abrió desde la pantalla de escenas: hay que ver el mapa
     startPlacing(id);
   };
   $('sheetDup').onclick = () => {
