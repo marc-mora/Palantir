@@ -15,7 +15,7 @@ Mapa de rol con **campo de visión por jugador**. El máster carga un mapa, dibu
 - **Jugador** (`/play.html`, pensado para móvil): ve con claridad su campo de visión, bajo una niebla tenue lo que ya ha explorado y en negro lo que nunca ha visto. No ve PNJ ni enemigos hasta que entran en su campo de visión, aunque estén en una zona ya explorada.
   - Toca donde quiere moverse: se crea una **propuesta de movimiento** con su distancia. El máster puede corregir el destino arrastrándolo y luego pulsa «Mover» (o la rechaza).
   - No puede proponer atravesar muros, puertas cerradas ni ventanas: el destino se queda delante del obstáculo.
-  - «Mirar» le deja girarse.
+  - Si su visión es un cono (menos de 360°), «Mirar» le deja girarse.
 - **Party** (para una tele o tablet en la mesa): unión de los campos de visión y de lo explorado por todos los jugadores. Se abre con el enlace del panel del máster, que lleva una clave.
 
 ### Reserva de personajes y PNJ
@@ -71,7 +71,7 @@ Los muros y las puertas cerradas cortan la visión y la luz. Las puertas abierta
 
 **El mapa se descubre al avanzar**: un jugador nuevo ve hasta 8 casillas (el máster lo cambia por ficha; 0 = sin límite, solo le frenan los muros). Lo que queda más lejos sigue en negro hasta que se acerca.
 
-**Nadie ve su espalda**: un jugador nuevo ve 180° hacia donde mira (el máster puede cambiar el ángulo por ficha, hasta 360° para criaturas que lo ven todo). El cono también recorta la visión nocturna y la verdadera. Al moverse, la ficha queda mirando en la dirección del movimiento; el jugador puede girarse cuando quiera con «Mirar» y el máster con el control de orientación.
+**Ángulo de visión**: por defecto todas las fichas ven 360°, todo a su alrededor. El máster puede estrecharlo por ficha (por ejemplo 180° para que no vea su espalda); entonces importa hacia dónde mira: al moverse queda mirando en la dirección del movimiento, el jugador puede girarse con «Mirar» y el máster con el control de orientación. El cono también recorta la visión nocturna y la verdadera.
 
 El servidor decide qué fichas recibe cada cliente: la posición de un PNJ que tu personaje no ve **no llega a tu móvil**. (La imagen del mapa y los muros sí se envían enteros y se tapan en el dispositivo.)
 

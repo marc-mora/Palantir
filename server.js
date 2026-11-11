@@ -32,7 +32,9 @@ const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
 const MAX_BACKUP_BYTES = 400 * 1024 * 1024;
 const MAX_WALLS = 20000;
 const MAX_SCENES = 60;
-const DEFAULT_PC_ANGLE = 180; // grados de campo de visión de un jugador recién creado
+// Ángulo de visión (grados) de una ficha recién creada: ve todo a su alrededor. El máster puede
+// estrecharlo por ficha para que no vea lo que tiene a la espalda.
+const DEFAULT_ANGLE = 360;
 // Alcance de visión (casillas) de un jugador recién creado. Con alcance limitado el mapa se va
 // descubriendo al avanzar; sin límite (0) se vería de golpe todo lo que no tape un muro.
 const DEFAULT_PC_RANGE = 8;
@@ -387,7 +389,7 @@ const keepId = (v) => (typeof v === 'string' && ID_RE.test(v) ? v : newId());
 function blankToken() {
   return {
     id: newId(), name: 'Ficha', kind: 'npc', color: '#8b1e1e', x: 0, y: 0, facing: 0, size: 1,
-    range: 0, angle: 360, darkvision: 0, truesight: 0, light: 0, speed: DEFAULT_SPEED, hidden: false, invisible: false,
+    range: 0, angle: DEFAULT_ANGLE, darkvision: 0, truesight: 0, light: 0, speed: DEFAULT_SPEED, hidden: false, invisible: false,
   };
 }
 
@@ -673,7 +675,6 @@ function gmOp(room, ws, m) {
       if (kind === 'pc') {
         t.color = PALETTE[(n - 1) % PALETTE.length];
         t.range = DEFAULT_PC_RANGE;
-        t.angle = DEFAULT_PC_ANGLE;
       }
       room.roster.push(rosterEntry(t));
       break;
@@ -799,8 +800,7 @@ function gmOp(room, ws, m) {
         color: kind === 'pc' ? PALETTE[count % PALETTE.length] : '#8b1e1e',
         x: num(m.x, 0, -COORD, COORD), y: num(m.y, 0, -COORD, COORD),
         facing: 0, size: 1,
-        // Un personaje no ve lo que tiene a la espalda: por defecto, medio círculo hacia donde mira.
-        range: kind === 'pc' ? DEFAULT_PC_RANGE : 0, angle: kind === 'pc' ? DEFAULT_PC_ANGLE : 360, darkvision: 0, truesight: 0, light: 0,
+        range: kind === 'pc' ? DEFAULT_PC_RANGE : 0, angle: DEFAULT_ANGLE, darkvision: 0, truesight: 0, light: 0,
         speed: DEFAULT_SPEED,
         hidden: false, invisible: false,
       };
