@@ -307,7 +307,9 @@
   $('fit').onclick = fit;
 
   window.addEventListener('keydown', (e) => {
-    const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+    // Solo cuenta como «escribiendo» un campo de texto o número, no una casilla o un deslizador.
+    const el = document.activeElement;
+    const typing = el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el.tagName === 'INPUT' && !['checkbox', 'range', 'color', 'file'].includes(el.type));
     if (e.key === 'Escape') {
       draft = null;
       redraw();
