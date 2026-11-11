@@ -30,6 +30,7 @@
       <div class="gm-top">
         <span class="chip"><span id="status" class="status"></span><span id="sceneName">Máster</span></span>
         <button id="openScenes" class="pill">Escenas</button>
+        <button id="openSheets" class="pill">Personajes</button>
         <span id="awayNote" class="chip warn hidden">Los jugadores están en «<span id="awayName"></span>»<button id="bringHere" class="small primary">Traerlos aquí</button></span>
       </div>
       <div id="hint" class="gm-hint"></div>
@@ -66,7 +67,7 @@
 
       <section>
         <h3>Reserva</h3>
-        <p class="muted" style="font-size:12px;margin:0 0 6px">Prepara aquí personajes y PNJ con su ficha y sácalos al mapa cuando quieras.</p>
+        <p class="muted" style="font-size:12px;margin:0 0 6px">Personajes y PNJ ya preparados. Pulsa uno para ver su ficha o «Sacar» para ponerlo en el mapa.</p>
         <div class="row" style="margin-bottom:6px">
           <button id="addRosterPc" class="small">＋ Personaje</button>
           <button id="addRosterNpc" class="small">＋ PNJ</button>
@@ -75,14 +76,15 @@
       </section>
 
       <section id="tokenSec" class="hidden">
-        <h3 id="tokenTitle">Ficha seleccionada</h3>
+        <h3>Ficha seleccionada</h3>
         <div class="field"><label>Nombre</label><input type="text" data-f="name" maxlength="40"></div>
         <div class="field"><label>Tipo</label>
           <select data-f="kind"><option value="pc">Jugador</option><option value="npc">PNJ</option></select>
         </div>
         <div class="field"><label>Color</label><input type="color" data-f="color"></div>
         <div class="field"><label>Tamaño (casillas)</label><input type="number" data-f="size" min="0.5" max="6" step="0.5"></div>
-        <div class="field wide scene-only"><label>Orientación: <b id="facingOut"></b></label><input type="range" data-f="facing" min="0" max="359" step="1"></div>
+        <div class="vida-row"><label>Vida</label><input type="number" data-f="hp" title="Vida actual"><span>/</span><input type="number" data-f="hpMax" min="0" title="Vida máxima"><button id="openSheet" class="small" title="Características, habilidades y notas: solo las ves tú">Ficha completa</button></div>
+        <div class="field wide"><label>Orientación: <b id="facingOut"></b></label><input type="range" data-f="facing" min="0" max="359" step="1"></div>
         <div class="pc-only">
           <div class="field"><label>Alcance de visión (casillas, 0 = sin límite)</label><input type="number" data-f="range" min="0" max="1000" step="1"></div>
           <div class="field wide"><label>Ángulo de visión: <b id="angleOut"></b></label><input type="range" data-f="angle" min="10" max="360" step="5"></div>
@@ -92,10 +94,9 @@
         <div class="field"><label>Luz que porta (casillas)</label><input type="number" data-f="light" min="0" max="1000" step="1"></div>
         <div class="field"><label>Movimiento por turno (casillas, 0 = sin límite)</label><input type="number" data-f="speed" min="0" max="1000" step="1"></div>
         <label class="check"><input type="checkbox" data-f="invisible">Invisible (solo con visión verdadera)</label>
-        <label class="check"><input type="checkbox" data-f="hidden"><span id="hiddenLabel">Oculta a los jugadores</span></label>
+        <label class="check"><input type="checkbox" data-f="hidden">Oculta a los jugadores</label>
         <div class="row" style="flex-wrap:wrap;margin-top:8px">
-          <button id="spawnSel" class="small primary hidden">Sacar al mapa</button>
-          <button id="stash" class="small hidden" title="Quita la ficha del mapa y la guarda en la reserva con sus características">Retirar a la reserva</button>
+          <button id="stash" class="small" title="Quita la ficha del mapa y la guarda en la reserva con sus características">Retirar a la reserva</button>
           <button id="delToken" class="danger small">Eliminar ficha</button>
         </div>
         <button id="release" class="small hidden" title="Este personaje está ligado al dispositivo que lo abrió primero. Libéralo si el jugador cambia de móvil.">Liberar dispositivo</button>
@@ -141,6 +142,69 @@
     </header>
     <p id="importStatus" class="import-status hidden"></p>
     <div id="sceneCards" class="scene-grid"></div>
+  </div>
+
+  <div id="sheetScreen" class="scenes hidden">
+    <header>
+      <div>
+        <h2>Personajes y PNJ</h2>
+        <p class="muted">Crea aquí las fichas y quedan en la reserva de todas las escenas. La vida, las características, las habilidades y las notas solo las ves tú.</p>
+      </div>
+      <div class="scenes-actions">
+        <button id="newPc">＋ Nuevo personaje</button>
+        <button id="newNpc">＋ Nuevo PNJ</button>
+        <button id="closeSheets">Cerrar</button>
+      </div>
+    </header>
+    <div class="sheet-layout">
+      <nav id="sheetList" class="sheet-list"></nav>
+      <div class="sheet-main">
+        <p id="sheetEmpty" class="muted">Aún no hay ninguna ficha. Crea un personaje o un PNJ con los botones de arriba.</p>
+        <form id="sheetForm" class="sheet-form hidden" onsubmit="return false">
+          <div class="sheet-where"><span id="sheetWhere" class="badge"></span></div>
+          <fieldset>
+            <legend>Identidad</legend>
+            <div class="sheet-grid">
+              <label>Nombre<input type="text" data-s="name" maxlength="40"></label>
+              <label>Tipo<select data-s="kind"><option value="pc">Personaje jugador</option><option value="npc">PNJ</option></select></label>
+              <label>Color<input type="color" data-s="color"></label>
+              <label>Tamaño (casillas)<input type="number" data-s="size" min="0.5" max="6" step="0.5"></label>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Ficha del máster <small>solo la ves tú</small></legend>
+            <div class="sheet-grid">
+              <label>Vida actual<input type="number" data-s="hp"></label>
+              <label>Vida máxima<input type="number" data-s="hpMax" min="0"></label>
+            </div>
+            <div class="sheet-sub">Características</div>
+            <div id="sheetAttrs"></div>
+            <button type="button" id="addAttr" class="small">＋ Añadir característica</button>
+            <label class="block">Habilidades<textarea data-s="abilities" rows="4" maxlength="6000" placeholder="Ataques, conjuros, rasgos…"></textarea></label>
+            <label class="block">Notas<textarea data-s="notes" rows="4" maxlength="6000" placeholder="Motivaciones, botín, secretos…"></textarea></label>
+          </fieldset>
+          <fieldset>
+            <legend>Visión y movimiento <small>lo que afecta al mapa</small></legend>
+            <div class="sheet-grid">
+              <label class="pc-only">Alcance de visión (casillas, 0 = sin límite)<input type="number" data-s="range" min="0" max="1000" step="1"></label>
+              <label class="pc-only">Ángulo de visión (grados)<input type="number" data-s="angle" min="10" max="360" step="5"></label>
+              <label class="pc-only">Visión nocturna (casillas)<input type="number" data-s="darkvision" min="0" max="1000" step="1"></label>
+              <label class="pc-only">Visión verdadera (casillas)<input type="number" data-s="truesight" min="0" max="1000" step="1"></label>
+              <label>Luz que porta (casillas)<input type="number" data-s="light" min="0" max="1000" step="1"></label>
+              <label>Movimiento por turno (casillas, 0 = sin límite)<input type="number" data-s="speed" min="0" max="1000" step="1"></label>
+            </div>
+            <label class="check"><input type="checkbox" data-s="invisible">Invisible (solo con visión verdadera)</label>
+            <label class="check"><input type="checkbox" data-s="hidden"><span id="sheetHiddenLabel"></span></label>
+          </fieldset>
+          <div class="sheet-actions">
+            <button type="button" id="sheetSpawn" class="primary">Sacar al mapa</button>
+            <button type="button" id="sheetStash">Retirar a la reserva</button>
+            <button type="button" id="sheetDup">Duplicar</button>
+            <button type="button" id="sheetDel" class="danger">Eliminar</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 
   <div id="overlay" class="overlay hidden">

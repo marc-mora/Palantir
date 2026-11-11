@@ -39,7 +39,8 @@
   let memoryCache = { key: null, mask: null };
   let scenesSeen = false;
   let ruler = null; // [a, b] mientras se mide
-  let selRoster = null; // id de la ficha de la reserva seleccionada
+  let sheet = null; // ficha abierta en la pantalla de personajes: { type: 'roster' | 'token', id }
+  let focusNewAttr = false;
   let placing = null; // id de la ficha de la reserva que se va a colocar con el próximo clic
   let knownRoster = null; // para seleccionar la ficha de reserva recién creada
   let shareOrigin = location.origin;
@@ -98,11 +99,12 @@
       }
       if (sel && !S.tokens.some((t) => t.id === sel)) sel = null;
       if (knownRoster) {
+        // Ficha recién creada en la reserva: se abre para rellenarla.
         const fresh = S.roster.find((e) => !knownRoster.has(e.id));
-        if (fresh) { selRoster = fresh.id; sel = null; }
         knownRoster = null;
+        if (fresh) openSheets({ type: 'roster', id: fresh.id });
       }
-      if (selRoster && !S.roster.some((e) => e.id === selRoster)) selRoster = null;
+      renderSheets();
       if (placing && !S.roster.some((e) => e.id === placing)) stopPlacing();
       const fitKey = S.sceneId + '|' + S.scene.map + '|' + S.scene.width + 'x' + S.scene.height;
       if (fittedFor !== fitKey) {
@@ -211,14 +213,6 @@
 
   function select(id) {
     sel = id;
-    if (id) selRoster = null;
-    renderPanel();
-    redraw();
-  }
-
-  function selectRoster(id) {
-    selRoster = id;
-    if (id) sel = null;
     renderPanel();
     redraw();
   }
@@ -378,8 +372,8 @@
       draft = null;
       ruler = null;
       redraw();
-    } else if (typing) {
-      return;
+    } else if (typing || sheetsOpen() || !$('scenesScreen').classList.contains('hidden')) {
+      return; // escribiendo, o con una pantalla abierta encima del mapa
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       op('undoWall');
@@ -392,6 +386,7 @@
 
   const tokenSec = $('tokenSec');
   const fields = [...tokenSec.querySelectorAll('[data-f]')];
+  const hpTag = (t) => (t.hpMax > 0 ? `<span class="hp" title="Vida">${t.hp}/${t.hpMax}</span>` : '');
   const deg = (rad) => Math.round((((rad * 180) / Math.PI) % 360 + 360) % 360);
 
   function renderPanel() {
@@ -442,7 +437,7 @@
     $('tokens').innerHTML = S.tokens.length
       ? S.tokens.map((t) =>
           `<div class="token-row${t.id === sel ? ' sel' : ''}" data-id="${t.id}">` +
-          `<span class="dot" style="background:${P.esc(t.color)}"></span><span class="name">${P.esc(t.name)}</span>` +
+          `<span class="dot" style="background:${P.esc(t.color)}"></span><span class="name">${P.esc(t.name)}</span>` + hpTag(t) +
           (t.hidden ? '<span class="badge">oculta</span>' : '') +
           (t.invisible ? '<span class="badge">invisible</span>' : '') +
           (claimed.has(t.id) ? '<span class="badge" title="Ligado al dispositivo de un jugador">ligado</span>' : '') +
@@ -453,34 +448,27 @@
     // Reserva
     $('roster').innerHTML = S.roster.length
       ? S.roster.map((e) =>
-          `<div class="token-row${e.id === selRoster ? ' sel' : ''}" data-id="${e.id}">` +
-          `<span class="dot" style="background:${P.esc(e.color)}"></span><span class="name">${P.esc(e.name)}</span>` +
+          `<div class="token-row" data-id="${e.id}" title="Abrir su ficha">` +
+          `<span class="dot" style="background:${P.esc(e.color)}"></span><span class="name">${P.esc(e.name)}</span>` + hpTag(e) +
           (e.hidden ? '<span class="badge" title="Al sacarla, los jugadores no la verán hasta que la descubras">sale oculta</span>' : '') +
           (e.kind === 'pc' ? '<span class="badge">PJ</span>' : '<span class="badge">PNJ</span>') +
           `<button class="small${e.id === placing ? ' active' : ''}" data-spawn="${e.id}">Sacar</button></div>`).join('')
       : '<p class="muted" style="font-size:13px;margin:0">La reserva está vacía.</p>';
 
-    // Ficha seleccionada: del mapa o de la reserva (mismo formulario)
-    const inRoster = !!selRoster;
-    const t = inRoster ? rosterById(selRoster) : tokenById(sel);
+    // Ficha seleccionada
+    const t = tokenById(sel);
     tokenSec.classList.toggle('hidden', !t);
     if (t) {
-      $('tokenTitle').textContent = inRoster ? 'Ficha en la reserva' : 'Ficha seleccionada';
-      $('hiddenLabel').textContent = inRoster ? 'Sale oculta (los jugadores no la ven hasta que la descubras)' : 'Oculta a los jugadores';
-      for (const el of tokenSec.querySelectorAll('.scene-only')) el.classList.toggle('hidden', inRoster);
-      $('spawnSel').classList.toggle('hidden', !inRoster);
-      $('stash').classList.toggle('hidden', inRoster);
-      $('delToken').textContent = inRoster ? 'Eliminar de la reserva' : 'Eliminar ficha';
       for (const el of fields) {
         if (el === active) continue;
         const f = el.dataset.f;
         if (el.type === 'checkbox') el.checked = !!t[f];
-        else el.value = f === 'facing' ? deg(t.facing || 0) : t[f];
+        else el.value = f === 'facing' ? deg(t.facing || 0) : t[f] ?? 0;
       }
       $('facingOut').textContent = deg(t.facing || 0) + '°';
       $('angleOut').textContent = t.angle >= 360 ? '360° (todo alrededor)' : t.angle + '°';
       tokenSec.querySelector('.pc-only').classList.toggle('hidden', t.kind !== 'pc');
-      $('release').classList.toggle('hidden', inRoster || !claimed.has(t.id));
+      $('release').classList.toggle('hidden', !claimed.has(t.id));
     }
 
     // Escena
@@ -503,11 +491,10 @@
 
   function sendField(el) {
     const f = el.dataset.f;
-    if (!f || !(sel || selRoster)) return;
+    if (!f || !sel) return;
     let v = el.type === 'checkbox' ? el.checked : el.type === 'number' || el.type === 'range' ? Number(el.value) : el.value;
     if (f === 'facing') v = (v * Math.PI) / 180;
-    if (selRoster) op('updRoster', { id: selRoster, patch: { [f]: v } });
-    else op('updToken', { id: sel, patch: { [f]: v } });
+    op('updToken', { id: sel, patch: { [f]: v } });
   }
   tokenSec.addEventListener('input', (e) => {
     const el = e.target;
@@ -515,24 +502,17 @@
     sendField(el);
   });
   tokenSec.addEventListener('change', (e) => sendField(e.target));
-  $('delToken').onclick = () => {
-    if (selRoster) op('delRoster', { id: selRoster });
-    else if (sel) op('delToken', { id: sel });
-  };
+  $('delToken').onclick = () => sel && op('delToken', { id: sel });
   $('stash').onclick = () => sel && op('stash', { id: sel });
-  $('spawnSel').onclick = () => selRoster && startPlacing(selRoster);
+  $('openSheet').onclick = () => sel && openSheets({ type: 'token', id: sel });
 
-  const addRoster = (kind) => {
-    knownRoster = new Set(S.roster.map((e) => e.id));
-    op('addRoster', { kind });
-  };
-  $('addRosterPc').onclick = () => addRoster('pc');
-  $('addRosterNpc').onclick = () => addRoster('npc');
+  $('addRosterPc').onclick = () => newSheet('pc');
+  $('addRosterNpc').onclick = () => newSheet('npc');
   $('roster').addEventListener('click', (e) => {
     const spawn = e.target.dataset.spawn;
     if (spawn) return placing === spawn ? stopPlacing() : startPlacing(spawn);
     const row = e.target.closest('[data-id]');
-    if (row) selectRoster(row.dataset.id);
+    if (row) openSheets({ type: 'roster', id: row.dataset.id });
   });
   $('release').onclick = () => {
     const t = tokenById(sel);
@@ -599,6 +579,144 @@
     e.target.value = '';
   };
   $('mapClear').onclick = () => op('setMap', { url: null });
+
+  /* ---------- Pantalla de personajes y PNJ (fichas del máster) ---------- */
+
+  const sheetForm = $('sheetForm');
+  const sheetFields = [...sheetForm.querySelectorAll('[data-s]')];
+  const sheetObj = () => (!sheet ? null : sheet.type === 'roster' ? rosterById(sheet.id) : tokenById(sheet.id));
+  const sheetsOpen = () => !$('sheetScreen').classList.contains('hidden');
+
+  function openSheets(target) {
+    if (target) sheet = target;
+    $('sheetScreen').classList.remove('hidden');
+    renderSheets();
+  }
+
+  function closeSheets() {
+    $('sheetScreen').classList.add('hidden');
+  }
+
+  /** Guarda un cambio de la ficha abierta, esté en la reserva o en el mapa. */
+  function sheetPatch(patch) {
+    if (!sheet) return;
+    op(sheet.type === 'roster' ? 'updRoster' : 'updToken', { id: sheet.id, patch });
+  }
+
+  function renderSheets() {
+    if (!S || !sheetsOpen()) return;
+    if (sheet && !sheetObj()) sheet = null;
+    if (!sheet && S.roster.length) sheet = { type: 'roster', id: S.roster[0].id };
+    else if (!sheet && S.tokens.length) sheet = { type: 'token', id: S.tokens[0].id };
+
+    const row = (type, o) =>
+      `<div class="token-row${sheet && sheet.type === type && sheet.id === o.id ? ' sel' : ''}" data-type="${type}" data-id="${o.id}">` +
+      `<span class="dot" style="background:${P.esc(o.color)}"></span><span class="name">${P.esc(o.name)}</span>${hpTag(o)}</div>`;
+    const group = (title, type, list) => `<h4>${title}</h4>` + (list.length ? list.map((o) => row(type, o)).join('') : '<p class="none">—</p>');
+    $('sheetList').innerHTML =
+      group('Reserva · personajes', 'roster', S.roster.filter((e) => e.kind === 'pc')) +
+      group('Reserva · PNJ', 'roster', S.roster.filter((e) => e.kind !== 'pc')) +
+      group(`En el mapa · ${P.esc(S.sceneName)}`, 'token', S.tokens);
+
+    const o = sheetObj();
+    sheetForm.classList.toggle('hidden', !o);
+    $('sheetEmpty').classList.toggle('hidden', !!o);
+    if (!o) return;
+    const inRoster = sheet.type === 'roster';
+    const active = document.activeElement;
+    $('sheetWhere').textContent = inRoster ? 'En la reserva' : `En el mapa · ${S.sceneName}`;
+    $('sheetHiddenLabel').textContent = inRoster ? 'Sale oculta (los jugadores no la ven hasta que la descubras)' : 'Oculta a los jugadores';
+    for (const el of sheetFields) {
+      if (el === active) continue;
+      const f = el.dataset.s;
+      if (el.type === 'checkbox') el.checked = !!o[f];
+      else el.value = o[f] ?? (el.type === 'number' ? 0 : '');
+    }
+    for (const el of sheetForm.querySelectorAll('.pc-only')) el.classList.toggle('hidden', o.kind !== 'pc');
+    $('sheetSpawn').classList.toggle('hidden', !inRoster);
+    $('sheetDup').classList.toggle('hidden', !inRoster);
+    $('sheetStash').classList.toggle('hidden', inRoster);
+    $('sheetDel').textContent = inRoster ? 'Eliminar de la reserva' : 'Eliminar del mapa';
+
+    // Características: no se redibujan mientras se escribe en ellas.
+    const box = $('sheetAttrs');
+    if (!box.contains(active)) {
+      const attrs = o.attrs || [];
+      box.innerHTML = attrs.map((a, i) =>
+        `<div class="attr-row"><input type="text" maxlength="30" placeholder="Nombre (p. ej. Fuerza)" value="${P.esc(a.k)}" data-attr="k">` +
+        `<input type="text" maxlength="60" placeholder="Valor" value="${P.esc(a.v)}" data-attr="v">` +
+        `<button type="button" class="small" data-del-attr="${i}" title="Quitar">✕</button></div>`).join('');
+      if (focusNewAttr && box.lastElementChild) box.lastElementChild.querySelector('input').focus();
+      focusNewAttr = false;
+    }
+  }
+
+  const readAttrs = () => [...$('sheetAttrs').querySelectorAll('.attr-row')].map((r) => ({ k: r.querySelector('[data-attr=k]').value, v: r.querySelector('[data-attr=v]').value }));
+
+  function sendSheetField(el) {
+    const f = el.dataset.s;
+    if (!f) return;
+    const v = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+    sheetPatch({ [f]: v });
+  }
+  sheetForm.addEventListener('change', (e) => {
+    if (e.target.dataset.attr) sheetPatch({ attrs: readAttrs() });
+    else sendSheetField(e.target);
+  });
+  sheetForm.addEventListener('input', (e) => {
+    if (e.target.type === 'color' || e.target.type === 'checkbox') sendSheetField(e.target);
+  });
+  $('sheetAttrs').addEventListener('click', (e) => {
+    const i = e.target.dataset.delAttr;
+    if (i === undefined) return;
+    const attrs = readAttrs();
+    attrs.splice(Number(i), 1);
+    e.target.blur(); // para que la lista se redibuje
+    sheetPatch({ attrs });
+  });
+  $('addAttr').onclick = () => {
+    focusNewAttr = true;
+    sheetPatch({ attrs: [...readAttrs(), { k: '', v: '' }] });
+  };
+  $('sheetList').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-id]');
+    if (!row) return;
+    if (document.activeElement && sheetForm.contains(document.activeElement)) document.activeElement.blur(); // guarda lo que se estuviera escribiendo
+    sheet = { type: row.dataset.type, id: row.dataset.id };
+    renderSheets();
+  });
+  const newSheet = (kind) => {
+    knownRoster = new Set(S.roster.map((e) => e.id));
+    op('addRoster', { kind });
+  };
+  $('newPc').onclick = () => newSheet('pc');
+  $('newNpc').onclick = () => newSheet('npc');
+  $('openSheets').onclick = () => openSheets();
+  $('closeSheets').onclick = closeSheets;
+  $('sheetSpawn').onclick = () => {
+    if (!sheet || sheet.type !== 'roster') return;
+    const id = sheet.id;
+    closeSheets();
+    startPlacing(id);
+  };
+  $('sheetDup').onclick = () => {
+    if (!sheet || sheet.type !== 'roster') return;
+    knownRoster = new Set(S.roster.map((e) => e.id));
+    op('dupRoster', { id: sheet.id });
+  };
+  $('sheetStash').onclick = () => {
+    const o = sheetObj();
+    if (!o || sheet.type !== 'token') return;
+    op('stash', { id: o.id });
+    if (o.kind === 'pc') sheet = { type: 'roster', id: o.id }; // un personaje conserva su identidad en la reserva
+  };
+  $('sheetDel').onclick = () => {
+    const o = sheetObj();
+    if (!o) return;
+    const where = sheet.type === 'roster' ? 'de la reserva' : 'del mapa';
+    if (!confirm(`¿Eliminar a «${o.name}» ${where}? Se pierde su ficha.`)) return;
+    op(sheet.type === 'roster' ? 'delRoster' : 'delToken', { id: o.id });
+  };
 
   /* ---------- Pantalla de escenas ---------- */
 
@@ -920,6 +1038,15 @@
     for (const t of live) {
       if (S.combat && S.combat.turnId === t.id) P.drawTurnRing(view, t, t, g);
       P.drawToken(view, t, t, g, { selected: t.id === sel, alpha: t.hidden ? 0.45 : t.invisible ? 0.7 : 1 });
+      if (t.hpMax > 0) {
+        // Barra de vida: solo existe en esta pantalla, a los jugadores no se les envía.
+        const r = Vision.tokenRadius(t, g), w = r * 2, h = 5 / z, x = t.x - r, y = t.y - r - 10 / z;
+        const frac = Math.max(0, Math.min(1, t.hp / t.hpMax));
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.fillRect(x - 1 / z, y - 1 / z, w + 2 / z, h + 2 / z);
+        ctx.fillStyle = frac > 0.5 ? '#4caf7a' : frac > 0.25 ? '#e0a83a' : '#d9534f';
+        ctx.fillRect(x, y, w * frac, h);
+      }
     }
 
     // Ficha de la reserva a punto de colocarse
