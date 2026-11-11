@@ -638,6 +638,8 @@
     $('sheetStash').classList.toggle('hidden', inRoster);
     $('sheetDel').textContent = inRoster ? 'Eliminar de la reserva' : 'Eliminar del mapa';
 
+    renderLook(o, active);
+
     // Características: no se redibujan mientras se escribe en ellas.
     const box = $('sheetAttrs');
     if (!box.contains(active)) {
@@ -650,6 +652,68 @@
       focusNewAttr = false;
     }
   }
+
+  /* --- Figura con la que se ve la ficha en el mapa --- */
+
+  const fillSelect = (el, list) => { el.innerHTML = list.map((x) => `<option value="${x.id}">${P.esc(x.label)}</option>`).join(''); };
+  fillSelect($('lookRace'), Sprites.races);
+  fillSelect($('lookClass'), Sprites.classes);
+  $('lookMonsters').innerHTML = Sprites.monsters.map((m) => `<button type="button" data-monster="${m.id}"><canvas width="112" height="112"></canvas>${P.esc(m.label)}</button>`).join('');
+  for (const b of $('lookMonsters').children) {
+    const c = b.querySelector('canvas').getContext('2d');
+    c.translate(56, 56);
+    Sprites.draw(c, 'm:' + b.dataset.monster, '#8b1e1e', 40);
+  }
+
+  function renderLook(o, active) {
+    const p = Sprites.parse(o.sprite);
+    const type = p ? p.type : '';
+    if (active !== $('lookType')) $('lookType').value = type;
+    if (p && p.type === 'h') {
+      if (active !== $('lookRace')) $('lookRace').value = p.race;
+      if (active !== $('lookClass')) $('lookClass').value = p.cls;
+    }
+    $('lookRaceBox').classList.toggle('hidden', type !== 'h');
+    $('lookClassBox').classList.toggle('hidden', type !== 'h');
+    $('lookMonsters').classList.toggle('hidden', type !== 'm');
+    for (const b of $('lookMonsters').children) b.classList.toggle('active', !!p && p.monster === b.dataset.monster);
+
+    const cv = $('lookPreview'), c = cv.getContext('2d');
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, cv.width, cv.height);
+    c.translate(cv.width / 2, cv.height / 2);
+    if (!Sprites.draw(c, o.sprite, o.color, 74)) {
+      c.beginPath(); c.arc(0, 0, 74, 0, P.TAU);
+      c.fillStyle = o.color; c.fill();
+      c.lineWidth = 7; c.strokeStyle = '#101018'; c.stroke();
+      c.fillStyle = '#fff'; c.font = '600 74px system-ui, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText((o.name || '?').trim().charAt(0).toUpperCase(), 0, 4);
+    }
+  }
+
+  /** Cambia la figura; las criaturas grandes ajustan también el tamaño de la ficha. */
+  function setLook(sprite) {
+    const o = sheetObj();
+    if (!o) return;
+    const patch = { sprite };
+    const hint = Sprites.sizeHint(sprite), before = Sprites.sizeHint(o.sprite);
+    if (hint) patch.size = hint;
+    else if (before && o.size === before) patch.size = 1;
+    sheetPatch(patch);
+  }
+  const humanoidLook = () => `h:${$('lookRace').value}:${$('lookClass').value}`;
+  $('lookType').onchange = (e) => {
+    const p = Sprites.parse((sheetObj() || {}).sprite);
+    if (e.target.value === 'h') setLook(humanoidLook());
+    else if (e.target.value === 'm') setLook('m:' + (p && p.monster ? p.monster : Sprites.monsters[0].id));
+    else setLook('');
+  };
+  $('lookRace').onchange = () => setLook(humanoidLook());
+  $('lookClass').onchange = () => setLook(humanoidLook());
+  $('lookMonsters').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-monster]');
+    if (b) setLook('m:' + b.dataset.monster);
+  });
 
   const readAttrs = () => [...$('sheetAttrs').querySelectorAll('.attr-row')].map((r) => ({ k: r.querySelector('[data-attr=k]').value, v: r.querySelector('[data-attr=v]').value }));
 

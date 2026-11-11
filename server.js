@@ -40,7 +40,9 @@ const DEFAULT_ANGLE = 360;
 const DEFAULT_PC_RANGE = 8;
 // Datos del personaje (iguales en todas las escenas). Posición, orientación y
 // ocultación son propias de cada escena.
-const CHAR_FIELDS = ['name', 'color', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light', 'speed', 'hp', 'hpMax', 'attrs', 'abilities', 'notes'];
+const CHAR_FIELDS = ['name', 'color', 'sprite', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light', 'speed', 'hp', 'hpMax', 'attrs', 'abilities', 'notes'];
+// Figura con la que nace una ficha nueva (ver public/sprites.js). '' = círculo con la inicial.
+const DEFAULT_SPRITE = { pc: 'h:humano:guerrero', npc: 'h:humano:campesino' };
 // Ficha privada del máster: vida, características, habilidades y notas. Nunca se envía a los jugadores.
 const blankSheet = () => ({ hp: 0, hpMax: 0, attrs: [], abilities: '', notes: '' });
 const DEFAULT_SPEED = 6; // casillas por turno
@@ -215,6 +217,7 @@ function migrate(room) {
     for (const k of Object.keys(blank.scene)) if (!(k in sc.scene)) sc.scene[k] = blank.scene[k];
     for (const t of sc.tokens.concat(sc.start ? sc.start.tokens : [])) {
       if (!('speed' in t)) t.speed = DEFAULT_SPEED;
+      if (!('sprite' in t)) t.sprite = ''; // las fichas anteriores a las figuras siguen siendo círculos
       for (const [k, v] of Object.entries(blankSheet())) if (!(k in t)) t[k] = v;
     }
   }
@@ -222,7 +225,10 @@ function migrate(room) {
   if (!room.partyKey) room.partyKey = newSecret().slice(0, 12);
   if (!room.claims || typeof room.claims !== 'object') room.claims = {};
   if (!Array.isArray(room.roster)) room.roster = [];
-  for (const e of room.roster) for (const [k, v] of Object.entries(blankSheet())) if (!(k in e)) e[k] = v;
+  for (const e of room.roster) {
+    if (!('sprite' in e)) e.sprite = '';
+    for (const [k, v] of Object.entries(blankSheet())) if (!(k in e)) e[k] = v;
+  }
 }
 
 function loadRooms() {
@@ -285,6 +291,7 @@ function applyTokenPatch(t, p) {
   if (!p || typeof p !== 'object') return;
   if ('name' in p) t.name = str(p.name, t.name, 40);
   if ('color' in p) t.color = color(p.color, t.color);
+  if ('sprite' in p && typeof p.sprite === 'string' && /^[a-z0-9:]{0,40}$/.test(p.sprite)) t.sprite = p.sprite;
   if ('kind' in p) t.kind = p.kind === 'npc' ? 'npc' : 'pc';
   if ('x' in p) t.x = num(p.x, t.x, -COORD, COORD);
   if ('y' in p) t.y = num(p.y, t.y, -COORD, COORD);
@@ -410,7 +417,7 @@ const keepId = (v) => (typeof v === 'string' && ID_RE.test(v) ? v : newId());
 
 function blankToken() {
   return {
-    id: newId(), name: 'Ficha', kind: 'npc', color: '#8b1e1e', x: 0, y: 0, facing: 0, size: 1,
+    id: newId(), name: 'Ficha', kind: 'npc', color: '#8b1e1e', sprite: '', x: 0, y: 0, facing: 0, size: 1,
     range: 0, angle: DEFAULT_ANGLE, darkvision: 0, truesight: 0, light: 0, speed: DEFAULT_SPEED, hidden: false, invisible: false,
     ...blankSheet(),
   };
@@ -695,6 +702,7 @@ function gmOp(room, ws, m) {
       const t = blankToken();
       t.kind = kind;
       t.name = (kind === 'pc' ? 'Jugador ' : 'PNJ ') + n;
+      t.sprite = DEFAULT_SPRITE[kind];
       if (kind === 'pc') {
         t.color = PALETTE[(n - 1) % PALETTE.length];
         t.range = DEFAULT_PC_RANGE;
@@ -831,6 +839,7 @@ function gmOp(room, ws, m) {
         name: (kind === 'pc' ? 'Jugador ' : 'PNJ ') + (count + 1),
         kind,
         color: kind === 'pc' ? PALETTE[count % PALETTE.length] : '#8b1e1e',
+        sprite: DEFAULT_SPRITE[kind],
         x: num(m.x, 0, -COORD, COORD), y: num(m.y, 0, -COORD, COORD),
         range: kind === 'pc' ? DEFAULT_PC_RANGE : 0,
       };
@@ -959,12 +968,12 @@ function updateExplored(room) {
 /* ---------- Vistas por cliente ---------- */
 
 function publicToken(t) {
-  return { id: t.id, name: t.name, kind: t.kind, color: t.color, x: t.x, y: t.y, facing: t.facing, size: t.size, angle: t.angle };
+  return { id: t.id, name: t.name, kind: t.kind, color: t.color, sprite: t.sprite, x: t.x, y: t.y, facing: t.facing, size: t.size, angle: t.angle };
 }
 
 function viewerToken(t) {
   return {
-    id: t.id, name: t.name, color: t.color, x: t.x, y: t.y, facing: t.facing, size: t.size,
+    id: t.id, name: t.name, color: t.color, sprite: t.sprite, x: t.x, y: t.y, facing: t.facing, size: t.size,
     range: t.range, angle: t.angle, darkvision: t.darkvision, truesight: t.truesight, light: t.light, speed: t.speed,
   };
 }

@@ -38,6 +38,16 @@ Uso:
 - **Retirar a la reserva**: quita una ficha del mapa guardando su ficha tal como está. Un personaje retirado conserva su móvil y lo que había explorado.
 - Al **reiniciar** una escena, los PNJ recuperan la vida que tenían en el punto de inicio; la de los jugadores no se toca.
 
+### Figuras
+
+Las fichas se ven como figuras desde arriba, giradas hacia donde miran, en lugar de círculos. Son dibujos originales generados por código (`public/sprites.js`), sin imágenes externas. Se eligen en la ficha de cada personaje:
+
+- **Personaje**: una raza (humano, enano, halfling, alto elfo, elfo silvano, gnomo, ogro) combinada con una clase (guerrero, explorador, bribón, académico, hechicero, sacerdote, burgués, cortesano, campesino, ribereño).
+- **Monstruo**: goblin, orco, troll, gigante, esqueleto, zombi, espectro, lobo, rata gigante, araña gigante, murciélago gigante, hombre rata, hombre bestia, minotauro, demonio, dragón y limo. Las criaturas grandes ajustan solas el tamaño de la ficha.
+- **Círculo con la inicial**, como antes.
+
+El color de la ficha tiñe la peana y algunos detalles (capa, escudo, pluma, orbe…), y en el dragón y el limo, el cuerpo entero. Las fichas nuevas nacen como guerrero humano (jugadores) o campesino humano (PNJ); las creadas antes de este cambio siguen siendo círculos hasta que se les elija figura.
+
 ### Combate
 
 El máster pulsa «Iniciar combate», escribe la iniciativa de cada ficha y va pasando turnos. Los jugadores ven de quién es el turno (solo de quien pueden ver) y un aviso cuando es el suyo.
@@ -133,6 +143,7 @@ fog.js             Memoria de lo explorado por cada jugador (la calcula el servi
 shared/vision.js   Motor de visión (línea de visión, luz, polígono de visibilidad). Lo usan servidor y navegador.
 shared/uvtt.js     Lectura del formato Universal VTT de Dungeondraft.
 public/common.js   Cámara, entrada táctil, niebla y dibujo compartidos.
+public/sprites.js  Figuras vistas desde arriba (razas, clases y monstruos), dibujadas por código.
 public/gm.*        Pantalla del máster.
 public/play.*      Pantalla del jugador y de party (party.html).
 test/              Tests del motor de visión, la memoria y el importador (`npm test`).

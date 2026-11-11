@@ -171,6 +171,18 @@
               <label>Color<input type="color" data-s="color"></label>
               <label>Tamaño (casillas)<input type="number" data-s="size" min="0.5" max="6" step="0.5"></label>
             </div>
+            <div class="sheet-sub">Figura en el mapa <small class="muted">(vista desde arriba; el color de la ficha tiñe la peana y los detalles)</small></div>
+            <div class="look">
+              <canvas id="lookPreview" width="240" height="240"></canvas>
+              <div class="look-opts">
+                <div class="sheet-grid">
+                  <label>Tipo de figura<select id="lookType"><option value="h">Personaje</option><option value="m">Monstruo</option><option value="">Círculo con la inicial</option></select></label>
+                  <label id="lookRaceBox">Raza<select id="lookRace"></select></label>
+                  <label id="lookClassBox">Clase<select id="lookClass"></select></label>
+                </div>
+                <div id="lookMonsters" class="monster-grid"></div>
+              </div>
+            </div>
           </fieldset>
           <fieldset>
             <legend>Ficha del máster <small>solo la ves tú</small></legend>
@@ -216,6 +228,7 @@
 
   <script src="/shared/vision.js"></script>
   <script src="/shared/uvtt.js"></script>
+  <script src="/sprites.js"></script>
   <script src="/common.js"></script>
   <script src="/gm.js"></script>
 </body>
