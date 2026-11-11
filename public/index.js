@@ -29,7 +29,8 @@
       const mine = localStorage.getItem(`palantir.pc.${data.code}.${p.id}`);
       const dot = `<span class="dot" style="background:${esc(p.color)}"></span>`;
       if (p.taken && !mine) return `<span class="taken">${dot}${esc(p.name)}<small>en uso en otro dispositivo</small></span>`;
-      return `<a href="/play.html?room=${data.code}&token=${p.id}">${dot}${esc(p.name)}${mine ? '<small>tu personaje</small>' : ''}</a>`;
+      const note = mine ? 'tu personaje' : p.reserve ? 'aún fuera del mapa' : '';
+      return `<a href="/play.html?room=${data.code}&token=${p.id}">${dot}${esc(p.name)}${note ? `<small>${note}</small>` : ''}</a>`;
     }).join('');
     pollTimer = setTimeout(() => loadRoom(code), 4000);
   }
