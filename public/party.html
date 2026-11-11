@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Palantir · Party</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-role="party">
+  <div class="stage"><canvas id="c"></canvas></div>
+
+  <div class="hud-top">
+    <span class="chip"><span id="status" class="status"></span><span id="who">Party</span></span>
+    <span id="turn" class="chip turn hidden"></span>
+  </div>
+
+  <div class="hud-bottom">
+    <div class="bar">
+      <button id="center">Ajustar vista</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast soft hidden"></div>
+
+  <div id="overlay" class="overlay hidden">
+    <div id="overlayMsg"></div>
+    <a id="back" href="/">Volver</a>
+  </div>
+
+  <script src="/shared/vision.js"></script>
+  <script src="/common.js"></script>
+  <script src="/play.js"></script>
+</body>
+</html>

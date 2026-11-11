@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Palantir · Máster</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="gm-app">
+    <nav class="gm-tools" id="tools">
+      <button data-tool="select" class="active" title="Mover fichas, abrir puertas"><span class="ico">✥</span>Mover</button>
+      <button data-tool="wall" title="Dibujar muros"><span class="ico">╱</span>Muro</button>
+      <button data-tool="rect" title="Columna u objeto rectangular"><span class="ico">▭</span>Bloque</button>
+      <button data-tool="door" title="Dibujar una puerta"><span class="ico">▯</span>Puerta</button>
+      <button data-tool="window" title="Ventana: deja ver pero no pasar"><span class="ico">▤</span>Ventana</button>
+      <button data-tool="light" title="Colocar una luz fija"><span class="ico">✺</span>Luz</button>
+      <button data-tool="erase" title="Borrar muros, puertas, ventanas y luces"><span class="ico">✕</span>Borrar</button>
+      <button data-tool="ruler" title="Medir distancias"><span class="ico">↔</span>Medir</button>
+      <hr>
+      <button id="addPc" title="Añadir personaje jugador"><span class="ico">＋</span>Jugador</button>
+      <button id="addNpc" title="Añadir PNJ o enemigo"><span class="ico">＋</span>PNJ</button>
+      <hr>
+      <button id="undo" title="Deshacer último muro (Ctrl+Z)"><span class="ico">↶</span>Deshacer</button>
+      <button id="fit" title="Ver el mapa entero"><span class="ico">⤢</span>Encajar</button>
+    </nav>
+
+    <main class="gm-main">
+      <canvas id="c"></canvas>
+      <div class="gm-top">
+        <span class="chip"><span id="status" class="status"></span><span id="sceneName">Máster</span></span>
+        <button id="openScenes" class="pill">Escenas</button>
+        <span id="awayNote" class="chip warn hidden">Los jugadores están en «<span id="awayName"></span>»<button id="bringHere" class="small primary">Traerlos aquí</button></span>
+      </div>
+      <div id="hint" class="gm-hint"></div>
+    </main>
+
+    <aside class="gm-panel">
+      <section>
+        <h3>Partida</h3>
+        <div class="share">
+          <img id="qr" alt="QR para unirse">
+          <div class="links">
+            <div class="code-big" id="codeBig"></div>
+            <a id="joinLink" target="_blank" rel="noopener"></a>
+            <a id="partyLink" target="_blank" rel="noopener">Abrir pantalla de party</a>
+            <button id="copyGm" class="small" title="Para seguir dirigiendo desde otro dispositivo. No lo compartas con los jugadores.">Copiar enlace de máster</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="proposalsSec" class="hidden">
+        <h3>Movimientos propuestos</h3>
+        <div id="proposals"></div>
+      </section>
+
+      <section>
+        <h3>Combate</h3>
+        <div id="combatBody"></div>
+      </section>
+
+      <section>
+        <h3>Fichas</h3>
+        <div id="tokens"></div>
+      </section>
+
+      <section id="tokenSec" class="hidden">
+        <h3>Ficha seleccionada</h3>
+        <div class="field"><label>Nombre</label><input type="text" data-f="name" maxlength="40"></div>
+        <div class="field"><label>Tipo</label>
+          <select data-f="kind"><option value="pc">Jugador</option><option value="npc">PNJ / enemigo</option></select>
+        </div>
+        <div class="field"><label>Color</label><input type="color" data-f="color"></div>
+        <div class="field"><label>Tamaño (casillas)</label><input type="number" data-f="size" min="0.5" max="6" step="0.5"></div>
+        <div class="field wide"><label>Orientación: <b id="facingOut"></b></label><input type="range" data-f="facing" min="0" max="359" step="1"></div>
+        <div class="pc-only">
+          <div class="field"><label>Alcance de visión (casillas, 0 = sin límite)</label><input type="number" data-f="range" min="0" max="1000" step="1"></div>
+          <div class="field wide"><label>Ángulo de visión: <b id="angleOut"></b></label><input type="range" data-f="angle" min="10" max="360" step="5"></div>
+          <div class="field"><label>Visión nocturna (casillas)</label><input type="number" data-f="darkvision" min="0" max="1000" step="1"></div>
+          <div class="field"><label>Visión verdadera (casillas)</label><input type="number" data-f="truesight" min="0" max="1000" step="1"></div>
+        </div>
+        <div class="field"><label>Luz que porta (casillas)</label><input type="number" data-f="light" min="0" max="1000" step="1"></div>
+        <div class="field"><label>Movimiento por turno (casillas, 0 = sin límite)</label><input type="number" data-f="speed" min="0" max="1000" step="1"></div>
+        <label class="check"><input type="checkbox" data-f="invisible">Invisible (solo con visión verdadera)</label>
+        <label class="check"><input type="checkbox" data-f="hidden">Oculta a los jugadores</label>
+        <button id="delToken" class="danger small">Eliminar ficha</button>
+        <button id="release" class="small hidden" title="Este personaje está ligado al dispositivo que lo abrió primero. Libéralo si el jugador cambia de móvil.">Liberar dispositivo</button>
+      </section>
+
+      <section>
+        <h3>Escena</h3>
+        <div class="field wide">
+          <label>Mapa (PNG, JPG o WebP)</label>
+          <div class="row"><input id="mapFile" type="file" accept="image/png,image/jpeg,image/webp" style="flex:1;min-width:0;width:0"><button id="mapClear" class="small">Quitar</button></div>
+        </div>
+        <div class="field"><label>Tamaño de casilla (px)</label><input id="gridSize" type="number" min="10" max="500" step="1"></div>
+        <div class="unit-row"><label>Cada casilla mide</label><input id="cellDistance" type="number" min="0.01" step="0.5"><input id="unit" type="text" maxlength="8" placeholder="m"></div>
+        <label class="check"><input id="showGrid" type="checkbox">Mostrar cuadrícula</label>
+        <label class="check"><input id="snapGrid" type="checkbox">Ajustar muros a la cuadrícula</label>
+        <label class="check"><input id="dark" type="checkbox">Escena a oscuras (hace falta luz o visión nocturna)</label>
+        <label class="check"><input id="allies" type="checkbox">Los jugadores siempre ven a sus aliados</label>
+        <div class="field"><label>Radio de las luces nuevas (casillas)</label><input id="lightRadius" type="number" min="0.5" max="200" step="0.5" value="6"></div>
+        <button id="clearWalls" class="danger small">Borrar todos los muros, puertas y ventanas</button>
+      </section>
+
+      <section>
+        <h3>Vista</h3>
+        <div class="field wide"><label>Ver como</label><select id="preview"></select></div>
+        <label class="check"><input id="syncParty" type="checkbox">La pantalla de party sigue mi encuadre</label>
+      </section>
+    </aside>
+  </div>
+
+  <div id="scenesScreen" class="scenes hidden">
+    <header>
+      <div>
+        <h2>Escenas</h2>
+        <p class="muted">Partida <b id="scenesCode"></b> · todo se guarda solo: puedes cerrar y seguir luego donde lo dejaste.</p>
+      </div>
+      <div class="scenes-actions">
+        <button id="backup" title="Descarga la partida entera (escenas, mapas, fichas y lo explorado) en un archivo">Copia de seguridad</button>
+        <button id="newScene">＋ Nueva escena</button>
+        <button id="importDd" class="primary">Importar de Dungeondraft</button>
+        <input id="ddFile" type="file" accept=".dd2vtt,.uvtt,.df2vtt,.json" class="hidden">
+        <button id="closeScenes">Cerrar</button>
+      </div>
+    </header>
+    <p id="importStatus" class="import-status hidden"></p>
+    <div id="sceneCards" class="scene-grid"></div>
+  </div>
+
+  <div id="overlay" class="overlay hidden">
+    <div id="overlayMsg"></div>
+    <a href="/">Volver al inicio</a>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/shared/vision.js"></script>
+  <script src="/shared/uvtt.js"></script>
+  <script src="/common.js"></script>
+  <script src="/gm.js"></script>
+</body>
+</html>
