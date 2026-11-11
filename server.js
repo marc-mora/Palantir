@@ -33,6 +33,9 @@ const MAX_BACKUP_BYTES = 400 * 1024 * 1024;
 const MAX_WALLS = 20000;
 const MAX_SCENES = 60;
 const DEFAULT_PC_ANGLE = 180; // grados de campo de visión de un jugador recién creado
+// Alcance de visión (casillas) de un jugador recién creado. Con alcance limitado el mapa se va
+// descubriendo al avanzar; sin límite (0) se vería de golpe todo lo que no tape un muro.
+const DEFAULT_PC_RANGE = 8;
 // Datos del personaje (iguales en todas las escenas). Posición, orientación y
 // ocultación son propias de cada escena.
 const CHAR_FIELDS = ['name', 'color', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light', 'speed'];
@@ -672,7 +675,7 @@ function gmOp(room, ws, m) {
         x: num(m.x, 0, -COORD, COORD), y: num(m.y, 0, -COORD, COORD),
         facing: 0, size: 1,
         // Un personaje no ve lo que tiene a la espalda: por defecto, medio círculo hacia donde mira.
-        range: 0, angle: kind === 'pc' ? DEFAULT_PC_ANGLE : 360, darkvision: 0, truesight: 0, light: 0,
+        range: kind === 'pc' ? DEFAULT_PC_RANGE : 0, angle: kind === 'pc' ? DEFAULT_PC_ANGLE : 360, darkvision: 0, truesight: 0, light: 0,
         speed: DEFAULT_SPEED,
         hidden: false, invisible: false,
       };
