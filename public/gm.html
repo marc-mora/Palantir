@@ -64,15 +64,25 @@
         <div id="tokens"></div>
       </section>
 
+      <section>
+        <h3>Reserva</h3>
+        <p class="muted" style="font-size:12px;margin:0 0 6px">Prepara aquí personajes y PNJ con su ficha y sácalos al mapa cuando quieras.</p>
+        <div class="row" style="margin-bottom:6px">
+          <button id="addRosterPc" class="small">＋ Personaje</button>
+          <button id="addRosterNpc" class="small">＋ PNJ</button>
+        </div>
+        <div id="roster"></div>
+      </section>
+
       <section id="tokenSec" class="hidden">
-        <h3>Ficha seleccionada</h3>
+        <h3 id="tokenTitle">Ficha seleccionada</h3>
         <div class="field"><label>Nombre</label><input type="text" data-f="name" maxlength="40"></div>
         <div class="field"><label>Tipo</label>
-          <select data-f="kind"><option value="pc">Jugador</option><option value="npc">PNJ / enemigo</option></select>
+          <select data-f="kind"><option value="pc">Jugador</option><option value="npc">PNJ</option></select>
         </div>
         <div class="field"><label>Color</label><input type="color" data-f="color"></div>
         <div class="field"><label>Tamaño (casillas)</label><input type="number" data-f="size" min="0.5" max="6" step="0.5"></div>
-        <div class="field wide"><label>Orientación: <b id="facingOut"></b></label><input type="range" data-f="facing" min="0" max="359" step="1"></div>
+        <div class="field wide scene-only"><label>Orientación: <b id="facingOut"></b></label><input type="range" data-f="facing" min="0" max="359" step="1"></div>
         <div class="pc-only">
           <div class="field"><label>Alcance de visión (casillas, 0 = sin límite)</label><input type="number" data-f="range" min="0" max="1000" step="1"></div>
           <div class="field wide"><label>Ángulo de visión: <b id="angleOut"></b></label><input type="range" data-f="angle" min="10" max="360" step="5"></div>
@@ -82,8 +92,12 @@
         <div class="field"><label>Luz que porta (casillas)</label><input type="number" data-f="light" min="0" max="1000" step="1"></div>
         <div class="field"><label>Movimiento por turno (casillas, 0 = sin límite)</label><input type="number" data-f="speed" min="0" max="1000" step="1"></div>
         <label class="check"><input type="checkbox" data-f="invisible">Invisible (solo con visión verdadera)</label>
-        <label class="check"><input type="checkbox" data-f="hidden">Oculta a los jugadores</label>
-        <button id="delToken" class="danger small">Eliminar ficha</button>
+        <label class="check"><input type="checkbox" data-f="hidden"><span id="hiddenLabel">Oculta a los jugadores</span></label>
+        <div class="row" style="flex-wrap:wrap;margin-top:8px">
+          <button id="spawnSel" class="small primary hidden">Sacar al mapa</button>
+          <button id="stash" class="small hidden" title="Quita la ficha del mapa y la guarda en la reserva con sus características">Retirar a la reserva</button>
+          <button id="delToken" class="danger small">Eliminar ficha</button>
+        </div>
         <button id="release" class="small hidden" title="Este personaje está ligado al dispositivo que lo abrió primero. Libéralo si el jugador cambia de móvil.">Liberar dispositivo</button>
       </section>
 

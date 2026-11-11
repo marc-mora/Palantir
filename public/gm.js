@@ -39,6 +39,9 @@
   let memoryCache = { key: null, mask: null };
   let scenesSeen = false;
   let ruler = null; // [a, b] mientras se mide
+  let selRoster = null; // id de la ficha de la reserva seleccionada
+  let placing = null; // id de la ficha de la reserva que se va a colocar con el próximo clic
+  let knownRoster = null; // para seleccionar la ficha de reserva recién creada
   let shareOrigin = location.origin;
 
   const HINTS = {
@@ -94,6 +97,13 @@
         selectNew = false;
       }
       if (sel && !S.tokens.some((t) => t.id === sel)) sel = null;
+      if (knownRoster) {
+        const fresh = S.roster.find((e) => !knownRoster.has(e.id));
+        if (fresh) { selRoster = fresh.id; sel = null; }
+        knownRoster = null;
+      }
+      if (selRoster && !S.roster.some((e) => e.id === selRoster)) selRoster = null;
+      if (placing && !S.roster.some((e) => e.id === placing)) stopPlacing();
       const fitKey = S.sceneId + '|' + S.scene.map + '|' + S.scene.width + 'x' + S.scene.height;
       if (fittedFor !== fitKey) {
         fittedFor = fitKey;
@@ -146,6 +156,7 @@
   /* ---------- Búsqueda de elementos bajo el cursor ---------- */
 
   const tokenById = (id) => (S ? S.tokens.find((t) => t.id === id) : null);
+  const rosterById = (id) => (S ? S.roster.find((e) => e.id === id) : null);
 
   function tokenAt(w) {
     const g = S.scene.gridSize;
@@ -200,6 +211,36 @@
 
   function select(id) {
     sel = id;
+    if (id) selRoster = null;
+    renderPanel();
+    redraw();
+  }
+
+  function selectRoster(id) {
+    selRoster = id;
+    if (id) sel = null;
+    renderPanel();
+    redraw();
+  }
+
+  /* ---------- Sacar fichas de la reserva: se elige el sitio con un clic ---------- */
+
+  function startPlacing(id) {
+    const e = rosterById(id);
+    if (!e) return;
+    setTool('select');
+    placing = id;
+    $('hint').textContent = `Haz clic en el mapa donde quieras colocar a «${e.name}» · Esc para cancelar`;
+    $('c').style.cursor = 'crosshair';
+    renderPanel();
+    redraw();
+  }
+
+  function stopPlacing() {
+    if (!placing) return;
+    placing = null;
+    $('hint').textContent = HINTS[tool];
+    $('c').style.cursor = tool === 'select' ? 'default' : 'crosshair';
     renderPanel();
     redraw();
   }
@@ -208,6 +249,7 @@
     tool = t;
     draft = null;
     ruler = null;
+    placing = null;
     for (const b of document.querySelectorAll('[data-tool]')) b.classList.toggle('active', b.dataset.tool === t);
     $('hint').textContent = HINTS[t];
     $('c').style.cursor = t === 'select' ? 'default' : 'crosshair';
@@ -221,10 +263,10 @@
     },
     onHover(w) {
       hover = w;
-      if (draft) redraw();
+      if (draft || placing) redraw();
     },
     dragStart(w) {
-      if (!S) return null;
+      if (!S || placing) return null; // colocando: el clic coloca y arrastrar mueve el mapa
       if (tool === 'select') {
         const pid = proposalAt(w);
         if (pid) {
@@ -279,6 +321,12 @@
     },
     onTap(w, e) {
       if (!S) return;
+      if (placing) {
+        selectNew = true;
+        op('spawn', { id: placing, x: w.x, y: w.y });
+        stopPlacing();
+        return;
+      }
       if (tool === 'select') {
         const d = wallAt(w, true);
         if (d) op('toggleDoor', { id: d.id });
@@ -326,6 +374,7 @@
     const el = document.activeElement;
     const typing = el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el.tagName === 'INPUT' && !['checkbox', 'range', 'color', 'file'].includes(el.type));
     if (e.key === 'Escape') {
+      stopPlacing();
       draft = null;
       ruler = null;
       redraw();
@@ -401,20 +450,37 @@
           '</div>').join('')
       : '<p class="muted" style="font-size:13px">Añade fichas con los botones «＋ Jugador» y «＋ PNJ».</p>';
 
-    // Ficha seleccionada
-    const t = tokenById(sel);
+    // Reserva
+    $('roster').innerHTML = S.roster.length
+      ? S.roster.map((e) =>
+          `<div class="token-row${e.id === selRoster ? ' sel' : ''}" data-id="${e.id}">` +
+          `<span class="dot" style="background:${P.esc(e.color)}"></span><span class="name">${P.esc(e.name)}</span>` +
+          (e.hidden ? '<span class="badge" title="Al sacarla, los jugadores no la verán hasta que la descubras">sale oculta</span>' : '') +
+          (e.kind === 'pc' ? '<span class="badge">PJ</span>' : '<span class="badge">PNJ</span>') +
+          `<button class="small${e.id === placing ? ' active' : ''}" data-spawn="${e.id}">Sacar</button></div>`).join('')
+      : '<p class="muted" style="font-size:13px;margin:0">La reserva está vacía.</p>';
+
+    // Ficha seleccionada: del mapa o de la reserva (mismo formulario)
+    const inRoster = !!selRoster;
+    const t = inRoster ? rosterById(selRoster) : tokenById(sel);
     tokenSec.classList.toggle('hidden', !t);
     if (t) {
+      $('tokenTitle').textContent = inRoster ? 'Ficha en la reserva' : 'Ficha seleccionada';
+      $('hiddenLabel').textContent = inRoster ? 'Sale oculta (los jugadores no la ven hasta que la descubras)' : 'Oculta a los jugadores';
+      for (const el of tokenSec.querySelectorAll('.scene-only')) el.classList.toggle('hidden', inRoster);
+      $('spawnSel').classList.toggle('hidden', !inRoster);
+      $('stash').classList.toggle('hidden', inRoster);
+      $('delToken').textContent = inRoster ? 'Eliminar de la reserva' : 'Eliminar ficha';
       for (const el of fields) {
         if (el === active) continue;
         const f = el.dataset.f;
         if (el.type === 'checkbox') el.checked = !!t[f];
-        else el.value = f === 'facing' ? deg(t.facing) : t[f];
+        else el.value = f === 'facing' ? deg(t.facing || 0) : t[f];
       }
-      $('facingOut').textContent = deg(t.facing) + '°';
+      $('facingOut').textContent = deg(t.facing || 0) + '°';
       $('angleOut').textContent = t.angle >= 360 ? '360° (todo alrededor)' : t.angle + '°';
       tokenSec.querySelector('.pc-only').classList.toggle('hidden', t.kind !== 'pc');
-      $('release').classList.toggle('hidden', !claimed.has(t.id));
+      $('release').classList.toggle('hidden', inRoster || !claimed.has(t.id));
     }
 
     // Escena
@@ -437,10 +503,11 @@
 
   function sendField(el) {
     const f = el.dataset.f;
-    if (!f || !sel) return;
+    if (!f || !(sel || selRoster)) return;
     let v = el.type === 'checkbox' ? el.checked : el.type === 'number' || el.type === 'range' ? Number(el.value) : el.value;
     if (f === 'facing') v = (v * Math.PI) / 180;
-    op('updToken', { id: sel, patch: { [f]: v } });
+    if (selRoster) op('updRoster', { id: selRoster, patch: { [f]: v } });
+    else op('updToken', { id: sel, patch: { [f]: v } });
   }
   tokenSec.addEventListener('input', (e) => {
     const el = e.target;
@@ -448,7 +515,25 @@
     sendField(el);
   });
   tokenSec.addEventListener('change', (e) => sendField(e.target));
-  $('delToken').onclick = () => sel && op('delToken', { id: sel });
+  $('delToken').onclick = () => {
+    if (selRoster) op('delRoster', { id: selRoster });
+    else if (sel) op('delToken', { id: sel });
+  };
+  $('stash').onclick = () => sel && op('stash', { id: sel });
+  $('spawnSel').onclick = () => selRoster && startPlacing(selRoster);
+
+  const addRoster = (kind) => {
+    knownRoster = new Set(S.roster.map((e) => e.id));
+    op('addRoster', { kind });
+  };
+  $('addRosterPc').onclick = () => addRoster('pc');
+  $('addRosterNpc').onclick = () => addRoster('npc');
+  $('roster').addEventListener('click', (e) => {
+    const spawn = e.target.dataset.spawn;
+    if (spawn) return placing === spawn ? stopPlacing() : startPlacing(spawn);
+    const row = e.target.closest('[data-id]');
+    if (row) selectRoster(row.dataset.id);
+  });
   $('release').onclick = () => {
     const t = tokenById(sel);
     if (t && confirm(`«${t.name}» dejará de estar ligado al móvil que lo lleva y ese móvil se desconectará. El siguiente que lo elija se lo queda.\n\n¿Liberar?`)) op('release', { id: sel });
@@ -836,6 +921,10 @@
       if (S.combat && S.combat.turnId === t.id) P.drawTurnRing(view, t, t, g);
       P.drawToken(view, t, t, g, { selected: t.id === sel, alpha: t.hidden ? 0.45 : t.invisible ? 0.7 : 1 });
     }
+
+    // Ficha de la reserva a punto de colocarse
+    const ghost = placing && hover ? rosterById(placing) : null;
+    if (ghost) P.drawToken(view, { ...ghost, facing: 0 }, hover, g, { alpha: 0.55 });
 
     // Regla
     if (ruler) {

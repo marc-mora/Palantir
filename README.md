@@ -18,6 +18,16 @@ Mapa de rol con **campo de visión por jugador**. El máster carga un mapa, dibu
   - «Mirar» le deja girarse.
 - **Party** (para una tele o tablet en la mesa): unión de los campos de visión y de lo explorado por todos los jugadores. Se abre con el enlace del panel del máster, que lleva una clave.
 
+### Reserva de personajes y PNJ
+
+En el panel del máster, «Reserva» guarda fichas ya preparadas (nombre, color, tamaño, visión, luz, movimiento…) que todavía no están en el mapa. La reserva es de la partida, así que vale para todas las escenas.
+
+- **Sacar**: pulsa «Sacar» y haz clic en el mapa donde quieras que aparezca.
+- **PNJ**: son plantillas. Cada vez que sacas uno se crea una copia («Goblin», «Goblin 2»…) y la plantilla sigue en la reserva.
+- **Personajes jugadores**: son únicos. Al sacarlo entra en juego y sale de la reserva. Su jugador puede elegirlo desde el principio; su móvil espera hasta que el máster lo saque.
+- **Sale oculta**: una ficha así entra al mapa sin que los jugadores la vean hasta que el máster la descubra.
+- **Retirar a la reserva**: quita una ficha del mapa guardando sus características. Un personaje retirado conserva su móvil y lo que había explorado.
+
 ### Combate
 
 El máster pulsa «Iniciar combate», escribe la iniciativa de cada ficha y va pasando turnos. Los jugadores ven de quién es el turno (solo de quien pueden ver) y un aviso cuando es el suyo.

@@ -40,6 +40,9 @@ const DEFAULT_PC_RANGE = 8;
 // ocultación son propias de cada escena.
 const CHAR_FIELDS = ['name', 'color', 'size', 'range', 'angle', 'darkvision', 'truesight', 'light', 'speed'];
 const DEFAULT_SPEED = 6; // casillas por turno
+const MAX_ROSTER = 300;
+// Lo que se guarda de una ficha en la reserva: sus características, sin posición.
+const ROSTER_FIELDS = ['id', 'kind', ...CHAR_FIELDS, 'hidden', 'invisible'];
 
 fs.mkdirSync(ROOMS_DIR, { recursive: true });
 fs.mkdirSync(MAPS_DIR, { recursive: true });
@@ -100,6 +103,7 @@ function createRoom() {
     code: newCode(), gmKey: newSecret(), partyKey: newSecret().slice(0, 12),
     scenes: [first], activeSceneId: first.id, partyCam: null,
     claims: {}, // pcId -> secreto del dispositivo que lleva ese personaje
+    roster: [], // reserva: personajes y PNJ con su ficha hecha, aún fuera del mapa
   };
   rooms.set(room.code, room);
   save(room);
@@ -208,6 +212,7 @@ function migrate(room) {
   if (!sceneById(room, room.activeSceneId)) room.activeSceneId = room.scenes[0].id;
   if (!room.partyKey) room.partyKey = newSecret().slice(0, 12);
   if (!room.claims || typeof room.claims !== 'object') room.claims = {};
+  if (!Array.isArray(room.roster)) room.roster = [];
 }
 
 function loadRooms() {
@@ -471,13 +476,13 @@ function exportRoom(room) {
       maps[url] = fs.readFileSync(path.join(MAPS_DIR, path.basename(url))).toString('base64');
     } catch { /* mapa perdido: la escena se exporta sin imagen */ }
   }
-  return { format: 'palantir-backup', version: 1, exportedAt: new Date().toISOString(), activeSceneId: room.activeSceneId, scenes: room.scenes, maps };
+  return { format: 'palantir-backup', version: 1, exportedAt: new Date().toISOString(), activeSceneId: room.activeSceneId, scenes: room.scenes, roster: room.roster, maps };
 }
 
 /** Crea una partida nueva (código y claves nuevos) a partir de una copia de seguridad. */
 function importRoom(data) {
   if (!data || data.format !== 'palantir-backup' || !Array.isArray(data.scenes) || !data.scenes.length) return null;
-  const room = { code: newCode(), gmKey: newSecret(), partyKey: newSecret().slice(0, 12), scenes: [], activeSceneId: null, partyCam: null, claims: {} };
+  const room = { code: newCode(), gmKey: newSecret(), partyKey: newSecret().slice(0, 12), scenes: [], activeSceneId: null, partyCam: null, claims: {}, roster: [] };
   const written = new Map();
   const mapUrl = (old) => {
     if (typeof old !== 'string' || !data.maps || typeof data.maps[old] !== 'string') return null;
@@ -498,9 +503,81 @@ function importRoom(data) {
     room.scenes.push(sc);
   }
   if (!room.activeSceneId) room.activeSceneId = room.scenes[0].id;
+  // Reserva: se descarta cualquier personaje que ya esté en el mapa o repetido.
+  const used = new Set(room.scenes.flatMap((sc) => sc.tokens.map((t) => t.id)));
+  for (const raw of (Array.isArray(data.roster) ? data.roster : []).slice(0, MAX_ROSTER)) {
+    const e = rosterEntry(cleanToken(raw));
+    if (!used.has(e.id)) room.roster.push(e);
+    used.add(e.id);
+  }
   rooms.set(room.code, room);
   save(room);
   return room;
+}
+
+/* ---------- Reserva: fichas preparadas que aún no están en el mapa ---------- */
+
+function rosterEntry(t) {
+  const e = {};
+  for (const f of ROSTER_FIELDS) e[f] = t[f];
+  return e;
+}
+
+/** «Goblin», «Goblin 2», «Goblin 3»… para poder sacar varias copias del mismo PNJ. */
+function uniqueName(sc, name) {
+  const taken = new Set(sc.tokens.map((t) => t.name));
+  if (!taken.has(name)) return name;
+  for (let n = 2; ; n++) {
+    const candidate = (name.slice(0, 36) + ' ' + n);
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+const isPcAnywhere = (room, id) =>
+  room.scenes.some((s) => s.tokens.some((t) => t.id === id && t.kind === 'pc')) || room.roster.some((e) => e.id === id && e.kind === 'pc');
+
+/**
+ * Saca una ficha de la reserva al mapa. Un PNJ es una plantilla: se copia y sigue en la
+ * reserva para sacar más. Un personaje jugador es único: sale de la reserva y entra en juego.
+ */
+function spawnFromRoster(room, sc, entry, x, y) {
+  if (sc.tokens.length >= 300) return null;
+  const t = { ...blankToken(), ...entry, x: num(x, 0, -COORD, COORD), y: num(y, 0, -COORD, COORD), facing: 0 };
+  if (entry.kind === 'pc') {
+    room.roster = room.roster.filter((e) => e !== entry);
+    sc.tokens.push(t);
+    addPcEverywhere(room, t, sc);
+  } else {
+    t.id = newId();
+    t.name = uniqueName(sc, entry.name);
+    sc.tokens.push(t);
+  }
+  if (sc.combat) sc.combat.inits[t.id] = 0;
+  return t;
+}
+
+/** Retira una ficha del mapa y la guarda en la reserva con sus características. */
+function stashToRoster(room, sc, t) {
+  if (room.roster.length >= MAX_ROSTER) return;
+  const entry = rosterEntry(t);
+  if (t.kind === 'pc') {
+    // Sale de todas las escenas, pero conserva su dispositivo y lo que ya había explorado.
+    for (const s of room.scenes) {
+      combatDrop(s, t.id);
+      s.tokens = s.tokens.filter((x) => x.id !== t.id);
+      delete s.proposals[t.id];
+    }
+    room.roster.push(entry);
+    return;
+  }
+  combatDrop(sc, t.id);
+  sc.tokens = sc.tokens.filter((x) => x !== t);
+  delete sc.proposals[t.id];
+  entry.id = newId();
+  entry.name = entry.name.replace(/ \d+$/, '') || entry.name; // «Goblin 3» vuelve como «Goblin»
+  // Si ya hay una plantilla idéntica no se duplica.
+  const same = (a, b) => ROSTER_FIELDS.every((f) => f === 'id' || a[f] === b[f]);
+  if (!room.roster.some((e) => same(e, entry))) room.roster.push(entry);
 }
 
 function addPcEverywhere(room, t, except) {
@@ -584,6 +661,54 @@ function gmOp(room, ws, m) {
     case 'combatNext':
       combatNext(sc);
       break;
+
+    /* --- Reserva --- */
+    case 'addRoster': {
+      if (room.roster.length >= MAX_ROSTER) return;
+      const kind = m.kind === 'npc' ? 'npc' : 'pc';
+      const n = room.roster.filter((e) => e.kind === kind).length + sc.tokens.filter((t) => t.kind === kind).length + 1;
+      const t = blankToken();
+      t.kind = kind;
+      t.name = (kind === 'pc' ? 'Jugador ' : 'PNJ ') + n;
+      if (kind === 'pc') {
+        t.color = PALETTE[(n - 1) % PALETTE.length];
+        t.range = DEFAULT_PC_RANGE;
+        t.angle = DEFAULT_PC_ANGLE;
+      }
+      room.roster.push(rosterEntry(t));
+      break;
+    }
+    case 'updRoster': {
+      const e = room.roster.find((x) => x.id === m.id);
+      if (!e || !m.patch || typeof m.patch !== 'object') return;
+      const was = e.kind;
+      const t = { ...blankToken(), ...e };
+      applyTokenPatch(t, m.patch);
+      Object.assign(e, rosterEntry(t));
+      if (was === 'pc' && e.kind !== 'pc') delete room.claims[e.id];
+      break;
+    }
+    case 'delRoster': {
+      const e = room.roster.find((x) => x.id === m.id);
+      if (!e) return;
+      room.roster = room.roster.filter((x) => x !== e);
+      if (e.kind === 'pc') {
+        delete room.claims[e.id];
+        for (const s of room.scenes) delete s.explored[e.id];
+      }
+      break;
+    }
+    case 'spawn': {
+      const e = room.roster.find((x) => x.id === m.id);
+      if (!e) return;
+      spawnFromRoster(room, sc, e, m.x, m.y);
+      break;
+    }
+    case 'stash': {
+      const t = token();
+      if (t) stashToRoster(room, sc, t);
+      break;
+    }
 
     /* --- Dispositivos --- */
     case 'release': {
@@ -856,6 +981,7 @@ function sendState(ws, room) {
     view.startAt = sc.start ? sc.start.at : null;
     view.combat = sc.combat ? { ...sc.combat, order: combatOrder(sc).map((t) => t.id) } : null;
     view.claimed = Object.keys(room.claims);
+    view.roster = room.roster;
     view.partyKey = room.partyKey;
     if (sendWalls) view.walls = sc.walls;
     if (sendFog) view.explored = sc.start ? { ...fogHead, by: sc.explored } : null;
@@ -879,6 +1005,8 @@ function sendState(ws, room) {
   view.viewers = viewers.map(viewerToken);
   view.tokens = tokens.map(publicToken);
   view.me = meta.role === 'player' && viewers[0] ? viewers[0].id : null;
+  // Su personaje existe pero el máster aún lo tiene en la reserva.
+  if (meta.role === 'player' && !view.me) view.waiting = room.roster.some((e) => e.id === meta.tokenId && e.kind === 'pc');
   if (sc.combat) {
     // Del orden de iniciativa solo se enseña a quien el jugador puede ver.
     const shown = new Set(tokens.map((t) => t.id));
@@ -1007,7 +1135,11 @@ async function handle(req, res) {
   if (m && req.method === 'GET') {
     const room = rooms.get(m[1].toUpperCase());
     if (!room) return json(res, 404, { error: 'No existe esa partida' });
-    const pcs = activeScene(room).tokens.filter((t) => t.kind === 'pc').map((t) => ({ id: t.id, name: t.name, color: t.color, taken: t.id in room.claims }));
+    const brief = (t, reserve) => ({ id: t.id, name: t.name, color: t.color, taken: t.id in room.claims, reserve });
+    const pcs = [
+      ...activeScene(room).tokens.filter((t) => t.kind === 'pc').map((t) => brief(t, false)),
+      ...room.roster.filter((e) => e.kind === 'pc').map((e) => brief(e, true)),
+    ];
     return json(res, 200, { code: room.code, pcs });
   }
 
@@ -1115,7 +1247,7 @@ wss.on('connection', (ws) => {
         return send(ws, { t: 'error', code: 'bad-key', msg: 'La pantalla de party se abre con el enlace que tiene el máster.' });
       }
       const tokenId = role === 'player' ? String(m.tokenId || '') : null;
-      if (role === 'player' && room.scenes.some((s) => s.tokens.some((t) => t.id === tokenId && t.kind === 'pc'))) {
+      if (role === 'player' && isPcAnywhere(room, tokenId)) {
         // Cada personaje queda ligado al primer dispositivo que lo abre.
         const owner = room.claims[tokenId];
         if (owner && owner !== m.secret) {

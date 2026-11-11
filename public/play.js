@@ -117,7 +117,11 @@
     updateTurn();
     if (role !== 'player') return;
     const m = me();
-    if (!m) return showOverlay('Tu personaje ya no está en la partida. Pide al máster que lo cree y vuelve a entrar.');
+    if (!m) {
+      return showOverlay(S.waiting
+        ? 'El máster aún no ha sacado a tu personaje al mapa. Espera aquí: entrarás en cuanto lo haga.'
+        : 'Tu personaje ya no está en la partida. Pide al máster que lo cree y vuelve a entrar.');
+    }
     $('overlay').classList.add('hidden');
     $('who').textContent = m.name;
     $('dot').style.background = m.color;
