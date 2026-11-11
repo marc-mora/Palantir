@@ -332,28 +332,37 @@ const P = (() => {
       ctx.lineWidth = 2.5 / z;
       ctx.stroke();
     }
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, r, 0, TAU);
-    ctx.fillStyle = t.color;
-    ctx.fill();
-    ctx.lineWidth = Math.max(1.5 / z, r * 0.1);
-    ctx.strokeStyle = t.kind === 'npc' ? '#1a0000' : '#101018';
-    ctx.stroke();
-    // Marca de orientación
-    const fx = Math.cos(t.facing || 0), fy = Math.sin(t.facing || 0);
-    ctx.beginPath();
-    ctx.moveTo(pos.x + fx * r * 0.7, pos.y + fy * r * 0.7);
-    ctx.lineTo(pos.x + fx * r * 1.3, pos.y + fy * r * 1.3);
-    ctx.lineWidth = Math.max(2 / z, r * 0.16);
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = '#fff';
-    ctx.stroke();
-    // Inicial
-    ctx.fillStyle = textColorFor(t.color);
-    ctx.font = `600 ${r}px system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText((t.name || '?').trim().charAt(0).toUpperCase(), pos.x, pos.y + r * 0.06);
+    if (t.sprite && typeof Sprites !== 'undefined' && Sprites.has(t.sprite)) {
+      // Figura vista desde arriba, girada hacia donde mira.
+      ctx.save();
+      ctx.translate(pos.x, pos.y);
+      ctx.rotate((t.facing || 0) + Math.PI / 2);
+      Sprites.draw(ctx, t.sprite, t.color, r);
+      ctx.restore();
+    } else {
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, r, 0, TAU);
+      ctx.fillStyle = t.color;
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5 / z, r * 0.1);
+      ctx.strokeStyle = t.kind === 'npc' ? '#1a0000' : '#101018';
+      ctx.stroke();
+      // Marca de orientación
+      const fx = Math.cos(t.facing || 0), fy = Math.sin(t.facing || 0);
+      ctx.beginPath();
+      ctx.moveTo(pos.x + fx * r * 0.7, pos.y + fy * r * 0.7);
+      ctx.lineTo(pos.x + fx * r * 1.3, pos.y + fy * r * 1.3);
+      ctx.lineWidth = Math.max(2 / z, r * 0.16);
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
+      // Inicial
+      ctx.fillStyle = textColorFor(t.color);
+      ctx.font = `600 ${r}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText((t.name || '?').trim().charAt(0).toUpperCase(), pos.x, pos.y + r * 0.06);
+    }
     // Nombre
     if (opts.label !== false) {
       const fs = 12 / z;
