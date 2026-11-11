@@ -65,23 +65,47 @@ El servidor decide qué fichas recibe cada cliente: la posición de un PNJ que t
 
 ## Ponerlo en marcha
 
-Hace falta [Node.js](https://nodejs.org) 18 o superior.
+### En un servidor (VPS) o en un Linux que quieras dejar encendido
 
 ```bash
-npm install
+git clone https://github.com/marc-mora/Palantir.git
+cd Palantir
+./install.sh
+```
+
+El instalador lo deja funcionando como servicio y al terminar te dice la dirección para abrirlo:
+
+- Instala Node.js si no hay uno válido (lo descarga de nodejs.org y comprueba su suma).
+- Copia la aplicación a `/opt/palantir` y la ejecuta con un usuario propio sin privilegios.
+- Guarda partidas y mapas en `/var/lib/palantir`, fuera del código, para que las actualizaciones no los toquen.
+- Arranca solo al encender la máquina y se reinicia si falla.
+- Usa el puerto 80 si está libre (si no, el 3000). Para elegirlo: `PORT=8080 ./install.sh`.
+
+Para **actualizar**: `git pull && ./install.sh`. Para quitarlo: `./install.sh --uninstall` (las partidas no se borran).
+
+Va por HTTP sin cifrar. Para HTTPS hace falta un dominio apuntando al servidor y un proxy delante (Caddy o nginx) hacia el puerto de Palantir.
+
+### En tu ordenador, para jugar en la misma mesa
+
+Con [Node.js](https://nodejs.org) 18 o superior:
+
+```bash
+./install.sh --local     # o: npm install
 npm start
 ```
 
-Abre `http://localhost:3000`, pulsa **Crear partida nueva** y comparte el QR o el código con los jugadores.
+Abre `http://localhost:3000`, pulsa **Crear partida nueva** y comparte el QR o el código con los jugadores. Los móviles se conectan por la wifi de casa escaneando el QR (el servidor muestra tu IP local al arrancar).
 
-- **Jugando en la misma mesa**: arranca el servidor en tu portátil; los móviles se conectan por la wifi de casa escaneando el QR (el servidor muestra tu IP local al arrancar).
-- **Jugando en remoto**: despliégalo en cualquier servicio que mantenga un proceso Node con WebSockets (Render, Fly.io, Railway, un VPS…). Hay un `Dockerfile` listo. Monta un volumen en `/app/data` para conservar partidas y mapas.
+### Otras formas
+
+Hay un `Dockerfile` para servicios como Render, Fly.io o Railway; monta un volumen en `/app/data` para conservar partidas y mapas.
 
 Variables de entorno: `PORT` (por defecto 3000) y `DATA_DIR` (por defecto `./data`).
 
 ## Estructura
 
 ```
+install.sh         Instalador: deja Palantir como servicio en un servidor Linux.
 server.js          Servidor HTTP + WebSocket. Partidas, escenas y filtrado por jugador.
 fog.js             Memoria de lo explorado por cada jugador (la calcula el servidor).
 shared/vision.js   Motor de visión (línea de visión, luz, polígono de visibilidad). Lo usan servidor y navegador.
