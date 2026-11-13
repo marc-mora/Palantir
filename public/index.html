@@ -25,6 +25,12 @@
       <h2>Soy el máster</h2>
       <button id="create" class="primary">Crear partida nueva</button>
       <div id="myRooms" class="room-list" style="margin-top:12px"></div>
+      <p class="muted" style="font-size:13px;margin:16px 0 6px">¿Ya tienes una partida en otro dispositivo? Entra con tu código de máster:</p>
+      <div class="row">
+        <input id="gmCode" type="text" maxlength="20" placeholder="XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        <button id="gmLogin">Entrar</button>
+      </div>
+      <p id="gmLoginMsg" class="muted hidden" style="font-size:13px"></p>
       <p style="margin:14px 0 0"><button id="restore" class="small">Restaurar una copia de seguridad</button>
         <input id="restoreFile" type="file" accept=".json,application/json" class="hidden">
         <span id="restoreMsg" class="muted" style="font-size:13px"></span></p>
