@@ -56,6 +56,14 @@ El máster pulsa «Iniciar combate», escribe la iniciativa de cada ficha y va p
 - Solo descuentan movimiento las propuestas aprobadas; el máster puede mover cualquier ficha libremente.
 - Las fichas que se crean durante el combate entran en la lista; se puede sacar o volver a meter a cualquiera.
 
+### Dirigir desde otro dispositivo
+
+Todo se guarda en el servidor, no en el navegador. Al crear una partida, el máster recibe un **código de máster** (`XXXX-XXXX-XXXX`). En cualquier otro dispositivo, en la página de inicio, «Entra con tu código de máster» abre esa misma partida como máster; varios dispositivos pueden dirigirla a la vez.
+
+- El código está siempre en el panel «Partida», oculto hasta pulsar «Mostrar» (la pantalla del máster puede estar a la vista de la mesa).
+- No se envía a los jugadores ni se incluye en las copias de seguridad. Una partida restaurada recibe un código nuevo.
+- El servidor limita los intentos de entrada por minuto para que no se pueda adivinar.
+
 ### Un personaje, un dispositivo
 
 El primer móvil que abre un personaje se lo queda: los demás lo ven «en uso» y no pueden abrir su vista. Si un jugador cambia de móvil o borra los datos del navegador, el máster selecciona su ficha y pulsa «Liberar dispositivo».

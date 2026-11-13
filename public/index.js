@@ -44,8 +44,30 @@
     const res = await fetch('/api/rooms', { method: 'POST' });
     const data = await res.json();
     localStorage.setItem(GM_PREFIX + data.code, data.gmKey);
-    location.href = '/gm.html?room=' + data.code;
+    location.href = '/gm.html?room=' + data.code + '&nueva=1';
   };
+
+  // Entrar como máster en una partida creada en otro dispositivo.
+  async function gmLogin() {
+    const msg = $('gmLoginMsg');
+    const code = $('gmCode').value.trim();
+    if (!code) return;
+    msg.classList.remove('hidden');
+    msg.textContent = 'Comprobando…';
+    try {
+      const res = await fetch('/api/gm-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo entrar');
+      localStorage.setItem(GM_PREFIX + data.code, data.gmKey);
+      location.href = '/gm.html?room=' + data.code;
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  }
+  $('gmLogin').onclick = gmLogin;
+  $('gmCode').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') gmLogin();
+  });
 
   // Partidas que este navegador ha creado como máster.
   const mine = Object.keys(localStorage).filter((k) => k.startsWith(GM_PREFIX)).map((k) => k.slice(GM_PREFIX.length));

@@ -45,6 +45,11 @@
             <div class="code-big" id="codeBig"></div>
             <a id="joinLink" target="_blank" rel="noopener"></a>
             <a id="partyLink" target="_blank" rel="noopener">Abrir pantalla de party</a>
+            <div class="gm-code">
+              <span class="muted">Código de máster</span>
+              <b id="gmCodeText" class="hidden"></b>
+              <button id="gmCodeToggle" class="small" title="Sirve para dirigir esta partida desde otro dispositivo. No lo compartas con los jugadores.">Mostrar</button>
+            </div>
             <button id="copyGm" class="small" title="Para seguir dirigiendo desde otro dispositivo. No lo compartas con los jugadores.">Copiar enlace de máster</button>
           </div>
         </div>
@@ -141,6 +146,12 @@
         <button id="closeScenes">Cerrar</button>
       </div>
     </header>
+    <div id="newGame" class="import-status hidden">
+      <p style="margin:0 0 6px"><b>Partida creada.</b> Este es tu código de máster:</p>
+      <p class="code-big" id="newGameCode" style="margin:0 0 6px"></p>
+      <p style="margin:0 0 8px">Apúntalo: con él podrás dirigir esta partida desde cualquier otro dispositivo, en la página de inicio. No lo compartas con los jugadores. Lo tienes siempre en el panel «Partida».</p>
+      <button id="newGameOk" class="small primary">Entendido</button>
+    </div>
     <p id="importStatus" class="import-status hidden"></p>
     <div id="sceneCards" class="scene-grid"></div>
   </div>

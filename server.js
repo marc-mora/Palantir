@@ -103,10 +103,37 @@ function blankScene(name) {
 const sceneById = (room, id) => room.scenes.find((s) => s.id === id) || null;
 const activeScene = (room) => sceneById(room, room.activeSceneId) || room.scenes[0];
 
+/**
+ * Código de máster: lo que el máster teclea en otro dispositivo para seguir dirigiendo.
+ * 12 caracteres sin letras ni cifras que se confundan (60 bits), único entre partidas.
+ */
+function newGmCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (;;) {
+    let c = '';
+    for (const b of crypto.randomBytes(12)) c += alphabet[b % alphabet.length];
+    if (![...rooms.values()].some((r) => r.gmCode === c)) return c;
+  }
+}
+
+/** Lo tecleado por el máster, sin guiones ni espacios y en mayúsculas. */
+const normalizeGmCode = (v) => (typeof v === 'string' ? v.toUpperCase().replace(/[^A-Z0-9]/g, '') : '');
+
+// Freno a los intentos de adivinar códigos de máster: pocos intentos por minuto y dirección.
+const LOGIN_MAX_PER_MINUTE = 10;
+const loginHits = new Map(); // ip -> { n, until }
+function loginAllowed(ip) {
+  const now = Date.now();
+  if (loginHits.size > 5000) for (const [k, h] of loginHits) if (h.until < now) loginHits.delete(k);
+  let h = loginHits.get(ip);
+  if (!h || h.until < now) loginHits.set(ip, (h = { n: 0, until: now + 60000 }));
+  return ++h.n <= LOGIN_MAX_PER_MINUTE;
+}
+
 function createRoom() {
   const first = blankScene('Escena 1');
   const room = {
-    code: newCode(), gmKey: newSecret(), partyKey: newSecret().slice(0, 12),
+    code: newCode(), gmKey: newSecret(), gmCode: newGmCode(), partyKey: newSecret().slice(0, 12),
     scenes: [first], activeSceneId: first.id, partyCam: null,
     claims: {}, // pcId -> secreto del dispositivo que lleva ese personaje
     roster: [], // reserva: personajes y PNJ con su ficha hecha, aún fuera del mapa
@@ -239,6 +266,11 @@ function loadRooms() {
       if (!room || !room.code || !room.gmKey) continue;
       migrate(room);
       rooms.set(room.code, room);
+      if (!room.gmCode) {
+        // Partida anterior a los códigos de máster: se le asigna uno.
+        room.gmCode = newGmCode();
+        save(room);
+      }
     } catch (e) {
       console.error('Partida ilegible:', f, e.message);
     }
@@ -514,7 +546,7 @@ function exportRoom(room) {
 /** Crea una partida nueva (código y claves nuevos) a partir de una copia de seguridad. */
 function importRoom(data) {
   if (!data || data.format !== 'palantir-backup' || !Array.isArray(data.scenes) || !data.scenes.length) return null;
-  const room = { code: newCode(), gmKey: newSecret(), partyKey: newSecret().slice(0, 12), scenes: [], activeSceneId: null, partyCam: null, claims: {}, roster: [] };
+  const room = { code: newCode(), gmKey: newSecret(), gmCode: newGmCode(), partyKey: newSecret().slice(0, 12), scenes: [], activeSceneId: null, partyCam: null, claims: {}, roster: [] };
   const written = new Map();
   const mapUrl = (old) => {
     if (typeof old !== 'string' || !data.maps || typeof data.maps[old] !== 'string') return null;
@@ -1022,6 +1054,7 @@ function sendState(ws, room) {
     view.claimed = Object.keys(room.claims);
     view.roster = room.roster;
     view.partyKey = room.partyKey;
+    view.gmCode = room.gmCode;
     if (sendWalls) view.walls = sc.walls;
     if (sendFog) view.explored = sc.start ? { ...fogHead, by: sc.explored } : null;
     return send(ws, view);
@@ -1167,6 +1200,21 @@ async function handle(req, res) {
 
   if (p === '/api/rooms' && req.method === 'POST') {
     const room = createRoom();
+    return json(res, 200, { code: room.code, gmKey: room.gmKey });
+  }
+
+  // Entrar como máster desde otro dispositivo con el código de máster.
+  if (p === '/api/gm-login' && req.method === 'POST') {
+    if (!loginAllowed(req.socket.remoteAddress || '')) return json(res, 429, { error: 'Demasiados intentos. Espera un minuto y vuelve a probar.' });
+    let body;
+    try {
+      body = JSON.parse((await readBody(req, 2048)).toString('utf8'));
+    } catch {
+      return json(res, 400, { error: 'Petición no válida' });
+    }
+    const wanted = normalizeGmCode(body && body.code);
+    const room = wanted.length === 12 ? [...rooms.values()].find((r) => r.gmCode === wanted) : null;
+    if (!room) return json(res, 403, { error: 'Ese código de máster no existe. Revisa que esté bien escrito.' });
     return json(res, 200, { code: room.code, gmKey: room.gmKey });
   }
 

@@ -121,6 +121,7 @@
         $('syncParty').checked = !!S.partyCam;
       }
       updatePartyLink();
+      updateGmCode();
       renderPanel();
       redraw();
     },
@@ -959,6 +960,25 @@
   /* ---------- Enlaces para compartir ---------- */
 
   // La pantalla de party enseña lo que ve todo el grupo, así que su enlace lleva una clave.
+  const fmtGmCode = (c) => (c || '').replace(/(.{4})(?=.)/g, '$1-'); // XXXX-XXXX-XXXX
+
+  // El código de máster está oculto por defecto: la pantalla del máster puede estar a la vista de la mesa.
+  function updateGmCode() {
+    if (!S) return;
+    $('gmCodeText').textContent = fmtGmCode(S.gmCode);
+    $('newGameCode').textContent = fmtGmCode(S.gmCode);
+  }
+  $('gmCodeToggle').onclick = () => {
+    const hidden = $('gmCodeText').classList.toggle('hidden');
+    $('gmCodeToggle').textContent = hidden ? 'Mostrar' : 'Ocultar';
+  };
+  // Recién creada la partida: se enseña el código una vez, bien visible.
+  if (P.qs.get('nueva')) {
+    $('newGame').classList.remove('hidden');
+    history.replaceState(null, '', location.pathname + '?room=' + code);
+  }
+  $('newGameOk').onclick = () => $('newGame').classList.add('hidden');
+
   function updatePartyLink() {
     if (S) $('partyLink').href = `${shareOrigin}/party.html?room=${code}&k=${S.partyKey}`;
   }
