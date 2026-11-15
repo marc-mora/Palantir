@@ -49,6 +49,7 @@
               <span class="muted">Código de máster</span>
               <b id="gmCodeText" class="hidden"></b>
               <button id="gmCodeToggle" class="small" title="Sirve para dirigir esta partida desde otro dispositivo. No lo compartas con los jugadores.">Mostrar</button>
+              <button id="gmRotate" class="small" title="Si el código o el enlace de máster han llegado a quien no debían, cámbialos">Cambiar</button>
             </div>
             <button id="copyGm" class="small" title="Para seguir dirigiendo desde otro dispositivo. No lo compartas con los jugadores.">Copiar enlace de máster</button>
           </div>
@@ -172,7 +173,7 @@
       <nav id="sheetList" class="sheet-list"></nav>
       <div class="sheet-main">
         <p id="sheetEmpty" class="muted">Aún no hay ninguna ficha. Crea un personaje o un PNJ con los botones de arriba.</p>
-        <form id="sheetForm" class="sheet-form hidden" onsubmit="return false">
+        <form id="sheetForm" class="sheet-form hidden">
           <div class="sheet-where"><span id="sheetWhere" class="badge"></span></div>
           <fieldset>
             <legend>Identidad</legend>

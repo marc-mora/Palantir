@@ -9,10 +9,14 @@
   // El enlace de máster lleva la clave en el hash; se guarda y se limpia de la barra.
   const hashKey = (location.hash.match(/key=([a-f0-9]+)/) || [])[1];
   if (hashKey) {
-    localStorage.setItem(KEY, hashKey);
+    // Un enlace ajeno no debe sustituir en silencio la clave que este navegador ya tenía.
+    const had = localStorage.getItem(KEY);
+    if (!had || had === hashKey || confirm(`Este enlace trae una clave de máster distinta para la partida ${code}.\n\n¿Sustituir la que tiene guardada este navegador?`)) {
+      localStorage.setItem(KEY, hashKey);
+    }
     history.replaceState(null, '', location.pathname + location.search);
   }
-  const key = localStorage.getItem(KEY);
+  let key = localStorage.getItem(KEY);
   if (!code || !key) {
     $('overlayMsg').textContent = 'Este navegador no tiene la clave de máster de esta partida. Usa el enlace de máster o crea una partida nueva.';
     $('overlay').classList.remove('hidden');
@@ -61,8 +65,15 @@
       $('status').classList.toggle('on', on);
     },
     onMessage(m) {
+      if (m.t === 'gmAuth') {
+        // El máster ha cambiado sus credenciales desde aquí: este navegador se queda con la clave nueva.
+        key = m.key;
+        localStorage.setItem(KEY, key);
+        return;
+      }
       if (m.t === 'error') {
         if (m.code === 'bad-key' || m.code === 'no-room') {
+          conn.stop(); // rechazados: no tiene sentido reintentar
           $('overlayMsg').textContent = m.msg;
           $('overlay').classList.remove('hidden');
         } else toast(m.msg);
@@ -584,6 +595,7 @@
   /* ---------- Pantalla de personajes y PNJ (fichas del máster) ---------- */
 
   const sheetForm = $('sheetForm');
+  sheetForm.addEventListener('submit', (e) => e.preventDefault());
   const sheetFields = [...sheetForm.querySelectorAll('[data-s]')];
   const sheetObj = () => (!sheet ? null : sheet.type === 'roster' ? rosterById(sheet.id) : tokenById(sheet.id));
   const sheetsOpen = () => !$('sheetScreen').classList.contains('hidden');
@@ -968,6 +980,12 @@
     $('gmCodeText').textContent = fmtGmCode(S.gmCode);
     $('newGameCode').textContent = fmtGmCode(S.gmCode);
   }
+  $('gmRotate').onclick = () => {
+    if (!confirm('Se generará un código de máster nuevo y dejarán de valer el anterior, el enlace de máster y el enlace de la pantalla de party.\n\nLos demás dispositivos de máster y las pantallas de party se desconectarán. Los jugadores no se ven afectados.\n\n¿Cambiar el código?')) return;
+    op('rotateGm');
+    $('gmCodeText').classList.remove('hidden');
+    $('gmCodeToggle').textContent = 'Ocultar';
+  };
   $('gmCodeToggle').onclick = () => {
     const hidden = $('gmCodeText').classList.toggle('hidden');
     $('gmCodeToggle').textContent = hidden ? 'Mostrar' : 'Ocultar';
