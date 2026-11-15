@@ -23,7 +23,12 @@
 
     <div class="card">
       <h2>Soy el máster</h2>
+      <div id="createPwBox" class="hidden" style="margin-bottom:10px">
+        <input id="createPw" type="password" maxlength="64" placeholder="Contraseña del servidor" autocomplete="off" style="width:100%">
+        <p class="muted" style="font-size:12px;margin:4px 0 0">Este servidor pide una contraseña para crear o restaurar partidas. No hace falta para continuar una que ya tengas.</p>
+      </div>
       <button id="create" class="primary">Crear partida nueva</button>
+      <p id="createMsg" class="muted hidden" style="font-size:13px"></p>
       <div id="myRooms" class="room-list" style="margin-top:12px"></div>
       <p class="muted" style="font-size:13px;margin:16px 0 6px">¿Ya tienes una partida en otro dispositivo? Entra con tu código de máster:</p>
       <div class="row">

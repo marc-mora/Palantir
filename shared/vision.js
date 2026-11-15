@@ -75,13 +75,16 @@
   }
 
   // Los cruces entre muros no dependen del observador: se calculan una vez por lista de muros.
+  // Tope de cruces que se guardan: un mapa normal tiene unos pocos; sin tope, miles de muros
+  // cruzados a propósito agotarían la memoria y bloquearían el servidor.
+  const MAX_CROSSINGS = 4000;
   const crossCache = new WeakMap();
   function wallCrossings(segs) {
     let pts = crossCache.get(segs);
     if (pts) return pts;
     pts = [];
     const n = segs.length;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n && pts.length < MAX_CROSSINGS * 2; i++) {
       const a = segs[i], adx = a.x2 - a.x1, ady = a.y2 - a.y1;
       for (let j = i + 1; j < n; j++) {
         const b = segs[j], bdx = b.x2 - b.x1, bdy = b.y2 - b.y1;
@@ -90,7 +93,10 @@
         const t = ((b.x1 - a.x1) * bdy - (b.y1 - a.y1) * bdx) / den;
         if (t <= 0 || t >= 1) continue;
         const u = ((b.x1 - a.x1) * ady - (b.y1 - a.y1) * adx) / den;
-        if (u > 0 && u < 1) pts.push(a.x1 + adx * t, a.y1 + ady * t);
+        if (u > 0 && u < 1) {
+          pts.push(a.x1 + adx * t, a.y1 + ady * t);
+          if (pts.length >= MAX_CROSSINGS * 2) break;
+        }
       }
     }
     crossCache.set(segs, pts);

@@ -120,6 +120,7 @@ El instalador lo deja funcionando como servicio y al terminar te dice la direcci
 - Guarda partidas y mapas en `/var/lib/palantir`, fuera del código, para que las actualizaciones no los toquen.
 - Arranca solo al encender la máquina y se reinicia si falla.
 - Usa el puerto 80 si está libre (si no, el 3000). Para elegirlo: `PORT=8080 ./install.sh`.
+- Genera una **contraseña para crear partidas** y la muestra al terminar. Se pide al crear o restaurar una partida, no para continuar las que ya existen. Para fijarla tú: `CREATE_PASSWORD=la-que-quieras ./install.sh`.
 
 Para **actualizar**: `git pull && ./install.sh`. Para quitarlo: `./install.sh --uninstall` (las partidas no se borran).
 
@@ -140,7 +141,35 @@ Abre `http://localhost:3000`, pulsa **Crear partida nueva** y comparte el QR o e
 
 Hay un `Dockerfile` para servicios como Render, Fly.io o Railway; monta un volumen en `/app/data` para conservar partidas y mapas.
 
-Variables de entorno: `PORT` (por defecto 3000) y `DATA_DIR` (por defecto `./data`).
+Variables de entorno:
+
+| Variable | Para qué |
+|---|---|
+| `PORT` | Puerto (por defecto 3000). |
+| `DATA_DIR` | Carpeta de partidas y mapas (por defecto `./data`). |
+| `CREATE_PASSWORD` | Si se define, crear o restaurar partidas exige esta contraseña. Sin ella el servidor queda abierto a quien llegue a él: adecuado en la red de casa, no en internet. |
+| `TRUST_PROXY` | Pon `1` solo si delante hay un proxy inverso de confianza (Caddy, nginx) que añade `X-Forwarded-For`; sin él, los límites por dirección verían a todo el mundo como una sola. |
+
+## Seguridad
+
+Lo que el servidor garantiza y lo que no. Las garantías están cubiertas por `test/security.test.js`.
+
+**Garantías**
+
+- A un jugador no le llega la posición de una ficha que su personaje no ve, ni la ficha privada del máster, ni el nombre de la escena, ni ninguna clave. Con la escena a oscuras solo recibe las luces que alumbran algo que podría ver.
+- Ningún mensaje mal formado, trama inválida o archivo ilegible tira el servidor. Si aun así ocurriera un error no previsto, las partidas se guardan antes de reiniciar.
+- Una partida con un cálculo de visión muy caro se frena a sí misma y no deja sin respuesta a las demás. Hay topes de muros por escena, de mensajes por conexión, de conexiones por dirección y de partidas.
+- Los mapas subidos tienen que ser imágenes PNG, JPG o WebP de verdad; los que no llegan a usarse se borran solos.
+- Crear o restaurar partidas puede protegerse con contraseña (`CREATE_PASSWORD`); entrar como máster, probar códigos de partida y crear partidas tienen límite de intentos por dirección.
+- El máster puede cambiar su código en el panel «Partida» → «Cambiar»: invalida el código, el enlace de máster y el enlace de party anteriores.
+- Las páginas llevan una política de seguridad de contenido estricta (sin scripts en línea ni de terceros) y no pueden incrustarse en otras webs.
+
+**Límites conocidos**
+
+- **Sin cifrado propio.** El servidor habla HTTP. En internet conviene ponerle delante un proxy con HTTPS (hace falta un dominio) y `TRUST_PROXY=1`; sin él, quien comparta red puede capturar el código de máster.
+- **El mapa y los muros se envían enteros** al dispositivo del jugador y se tapan allí. Un jugador con conocimientos técnicos puede ver el plano completo; no las fichas ocultas.
+- **El código de partida es la única llave del jugador.** Quien lo conozca puede quedarse un personaje que nadie haya cogido todavía. El máster puede liberarlo.
+- **Sin `CREATE_PASSWORD`** cualquiera que alcance el servidor puede crear partidas y restaurar copias (de una en una, hasta 400 MB).
 
 ## Estructura
 
@@ -154,7 +183,7 @@ public/common.js   Cámara, entrada táctil, niebla y dibujo compartidos.
 public/sprites.js  Figuras vistas desde arriba (razas, clases y monstruos), dibujadas por código.
 public/gm.*        Pantalla del máster.
 public/play.*      Pantalla del jugador y de party (party.html).
-test/              Tests del motor de visión, la memoria y el importador (`npm test`).
+test/              Tests del motor de visión, la memoria, el importador y la seguridad (`npm test`).
 ```
 
 Las partidas se guardan en `data/rooms/*.json` y los mapas en `data/maps/`.

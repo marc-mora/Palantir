@@ -49,6 +49,22 @@ function fillPolygon(poly, sp, fn) {
 }
 
 /** Celdas iluminadas por alguna luz (solo hace falta en escenas a oscuras). */
+/** Celdas que ilumina un foco concreto. */
+function lightBits(L, env, sp) {
+  const bits = newBits(sp);
+  const poly = Vision.visibilityPolygon(L.x, L.y, env.segs, env.bounds, L.r);
+  fillPolygon(poly, sp, (idx, cx, cy) => {
+    if (Math.hypot(cx - L.x, cy - L.y) <= L.r) setBit(bits, idx);
+  });
+  return bits;
+}
+
+/** ¿Comparten alguna celda dos mapas de bits? */
+function overlaps(a, b) {
+  for (let k = 0; k < a.length; k++) if (a[k] & b[k]) return true;
+  return false;
+}
+
 function litBits(env, sp) {
   const bits = newBits(sp);
   for (const L of env.lights) {
@@ -103,4 +119,4 @@ function union(list, sp) {
   return out.toString('base64');
 }
 
-module.exports = { spec, specKey, litBits, seenBits, merge, union, getBit };
+module.exports = { spec, specKey, litBits, lightBits, overlaps, seenBits, merge, union, getBit };

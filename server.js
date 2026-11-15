@@ -30,8 +30,16 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_MAP_BYTES = 60 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
 const MAX_BACKUP_BYTES = 400 * 1024 * 1024;
-const MAX_WALLS = 20000;
+const MAX_WALLS = 8000;
 const MAX_SCENES = 60;
+const MAX_ROOMS = 3000;
+const MAX_CONNECTIONS = 3000; // en total
+const MAX_CONNECTIONS_PER_IP = 80;
+// Si se define, crear o restaurar partidas exige esta contraseña (el instalador la genera).
+// Sin ella el servidor queda abierto, solo con límites por dirección: pensado para la red de casa.
+const CREATE_PASSWORD = process.env.CREATE_PASSWORD || '';
+// Detrás de un proxy inverso de confianza (Caddy, nginx) la dirección real llega en X-Forwarded-For.
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 // Ángulo de visión (grados) de una ficha recién creada: ve todo a su alrededor. El máster puede
 // estrecharlo por ficha para que no vea lo que tiene a la espalda.
 const DEFAULT_ANGLE = 360;
@@ -50,7 +58,7 @@ const MAX_ROSTER = 300;
 // Lo que se guarda de una ficha en la reserva: sus características, sin posición.
 const ROSTER_FIELDS = ['id', 'kind', ...CHAR_FIELDS, 'hidden', 'invisible'];
 
-fs.mkdirSync(ROOMS_DIR, { recursive: true });
+fs.mkdirSync(ROOMS_DIR, { recursive: true, mode: 0o700 }); // guarda las claves de las partidas
 fs.mkdirSync(MAPS_DIR, { recursive: true });
 
 const PALETTE = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#bfef45', '#fabed4', '#469990'];
@@ -77,7 +85,7 @@ function newCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (;;) {
     let c = '';
-    for (const b of crypto.randomBytes(5)) c += alphabet[b % alphabet.length];
+    for (const b of crypto.randomBytes(6)) c += alphabet[b % alphabet.length];
     if (!rooms.has(c)) return c;
   }
 }
@@ -119,15 +127,42 @@ function newGmCode() {
 /** Lo tecleado por el máster, sin guiones ni espacios y en mayúsculas. */
 const normalizeGmCode = (v) => (typeof v === 'string' ? v.toUpperCase().replace(/[^A-Z0-9]/g, '') : '');
 
-// Freno a los intentos de adivinar códigos de máster: pocos intentos por minuto y dirección.
-const LOGIN_MAX_PER_MINUTE = 10;
-const loginHits = new Map(); // ip -> { n, until }
-function loginAllowed(ip) {
+/* ---------- Límites por dirección ---------- */
+
+const limiters = new Map(); // nombre -> Map(ip -> { n, until })
+
+/** ¿Puede esta dirección hacer una acción más de este tipo dentro de la ventana de tiempo? */
+function allowed(name, ip, max, windowMs = 60000) {
+  let m = limiters.get(name);
+  if (!m) limiters.set(name, (m = new Map()));
+  if (m.size > 200000) m.clear(); // nunca crece sin tope
   const now = Date.now();
-  if (loginHits.size > 5000) for (const [k, h] of loginHits) if (h.until < now) loginHits.delete(k);
-  let h = loginHits.get(ip);
-  if (!h || h.until < now) loginHits.set(ip, (h = { n: 0, until: now + 60000 }));
-  return ++h.n <= LOGIN_MAX_PER_MINUTE;
+  let h = m.get(ip);
+  if (!h || h.until < now) m.set(ip, (h = { n: 0, until: now + windowMs }));
+  return ++h.n <= max;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const m of limiters.values()) for (const [k, h] of m) if (h.until < now) m.delete(k);
+}, 60000).unref();
+
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const fwd = String(req.headers['x-forwarded-for'] || '').split(',').pop().trim();
+    if (fwd) return fwd;
+  }
+  return req.socket.remoteAddress || '';
+}
+
+const isLoopback = (req) => /^(::1|::ffff:127\.|127\.)/.test(req.socket.remoteAddress || '') && !TRUST_PROXY;
+
+/** Contraseña del servidor para crear o restaurar partidas (comparación en tiempo constante). */
+function passwordOk(req) {
+  if (!CREATE_PASSWORD) return true;
+  let got = '';
+  try { got = decodeURIComponent(String(req.headers['x-create-password'] || '')); } catch { /* cabecera mal formada */ }
+  const digest = (v) => crypto.createHash('sha256').update(v).digest();
+  return crypto.timingSafeEqual(digest(got), digest(CREATE_PASSWORD));
 }
 
 function createRoom() {
@@ -201,24 +236,46 @@ function save(room) {
   if (r.saveTimer) return;
   r.saveTimer = setTimeout(() => {
     r.saveTimer = null;
-    const file = roomFile(room);
-    fs.writeFile(file + '.tmp', JSON.stringify(room), (err) => {
-      if (err) return console.error('No se pudo guardar la partida', room.code, err.message);
-      fs.rename(file + '.tmp', file, () => {});
-    });
+    writeRoom(room);
   }, 800);
+}
+
+/** Escribe la partida a disco. Nunca hay dos escrituras a la vez sobre el mismo archivo. */
+function writeRoom(room) {
+  const r = rt(room);
+  if (r.writing) {
+    r.dirty = true;
+    return;
+  }
+  r.writing = true;
+  const file = roomFile(room);
+  const done = () => {
+    r.writing = false;
+    if (r.dirty) {
+      r.dirty = false;
+      writeRoom(room);
+    }
+  };
+  fs.writeFile(file + '.tmp', JSON.stringify(room), { mode: 0o600 }, (err) => {
+    if (err) {
+      console.error('No se pudo guardar la partida', room.code, err.message);
+      return done();
+    }
+    fs.rename(file + '.tmp', file, done);
+  });
 }
 
 /** Al parar el servidor se escribe lo que quedara pendiente, para no perder los últimos cambios. */
 function flushSync() {
   for (const [code, r] of runtime) {
-    if (!r.saveTimer) continue;
+    if (!r.saveTimer && !r.dirty && !r.writing) continue;
     clearTimeout(r.saveTimer);
     r.saveTimer = null;
+    r.dirty = false;
     const room = rooms.get(code);
     if (!room) continue;
     try {
-      fs.writeFileSync(roomFile(room), JSON.stringify(room));
+      fs.writeFileSync(roomFile(room), JSON.stringify(room), { mode: 0o600 });
     } catch (e) {
       console.error('No se pudo guardar la partida', code, e.message);
     }
@@ -258,6 +315,8 @@ function migrate(room) {
   }
 }
 
+let unreadableRooms = 0;
+
 function loadRooms() {
   for (const f of fs.readdirSync(ROOMS_DIR)) {
     if (!f.endsWith('.json')) continue;
@@ -272,8 +331,48 @@ function loadRooms() {
         save(room);
       }
     } catch (e) {
+      unreadableRooms++;
       console.error('Partida ilegible:', f, e.message);
     }
+  }
+}
+
+/* ---------- Mapas subidos ---------- */
+
+const pendingMaps = new Map(); // url -> { code, at }: subidos pero aún sin asignar a una escena
+const PENDING_MAP_MS = 15 * 60 * 1000;
+const MAX_PENDING_MAPS = 4; // por partida
+
+/** ¿Empieza el archivo como una imagen PNG, JPEG o WebP de verdad? */
+function imageKind(buf) {
+  if (buf.length >= 8 && buf.readUInt32BE(0) === 0x89504e47 && buf.readUInt32BE(4) === 0x0d0a1a0a) return 'png';
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+
+// Un mapa subido que nadie llega a usar se borra a los 15 minutos.
+setInterval(() => {
+  const now = Date.now();
+  for (const [url, p] of pendingMaps) {
+    if (now - p.at < PENDING_MAP_MS) continue;
+    pendingMaps.delete(url);
+    unlinkMap(url);
+  }
+}, 60000).unref();
+
+/** Al arrancar se borran los mapas que ninguna partida usa (restos de subidas a medias o de caídas). */
+function sweepOrphanMaps() {
+  if (unreadableRooms) return; // con partidas ilegibles no se borra nada: sus mapas podrían hacer falta
+  const used = new Set();
+  for (const room of rooms.values()) for (const sc of room.scenes) if (sc.scene.map) used.add(path.basename(sc.scene.map));
+  const cutoff = Date.now() - 3600 * 1000;
+  for (const f of fs.readdirSync(MAPS_DIR)) {
+    if (used.has(f)) continue;
+    try {
+      const file = path.join(MAPS_DIR, f);
+      if (fs.statSync(file).mtimeMs < cutoff) fs.unlinkSync(file);
+    } catch { /* se intentará en el próximo arranque */ }
   }
 }
 
@@ -783,6 +882,24 @@ function gmOp(room, ws, m) {
       break;
     }
 
+    /* --- Credenciales del máster --- */
+    case 'rotateGm': {
+      // Cambia el código de máster y las claves: los demás dispositivos de máster y las
+      // pantallas de party quedan fuera hasta que entren con las credenciales nuevas.
+      room.gmKey = newSecret();
+      room.gmCode = newGmCode();
+      room.partyKey = newSecret().slice(0, 12);
+      send(ws, { t: 'gmAuth', key: room.gmKey });
+      for (const c of [...rt(room).clients]) {
+        if (c === ws || c.meta.role === 'player') continue;
+        send(c, { t: 'error', code: 'bad-key', msg: 'El máster ha cambiado el código de esta partida. Vuelve a entrar con el nuevo.' });
+        rt(room).clients.delete(c);
+        c.meta = null;
+        c.close();
+      }
+      break;
+    }
+
     /* --- Dispositivos --- */
     case 'release': {
       delete room.claims[m.id];
@@ -808,7 +925,7 @@ function gmOp(room, ws, m) {
 
     /* --- Escena abierta --- */
     case 'setScene': {
-      const s = sc.scene, p = m.patch || {};
+      const s = sc.scene, p = m.patch && typeof m.patch === 'object' ? m.patch : {};
       if ('gridSize' in p) s.gridSize = num(p.gridSize, s.gridSize, 10, 500);
       if ('showGrid' in p) s.showGrid = !!p.showGrid;
       if ('dark' in p) s.dark = !!p.dark;
@@ -823,6 +940,7 @@ function gmOp(room, ws, m) {
         sc.scene.map = null;
       } else {
         if (!mapUrlOk(room, m.url)) return;
+        pendingMaps.delete(m.url);
         sc.scene.map = m.url;
         sc.scene.width = num(m.width, 2100, 50, 20000);
         sc.scene.height = num(m.height, 1400, 50, 20000);
@@ -968,11 +1086,47 @@ function maybeStart(room) {
   const sc = activeScene(room);
   if (sc.start) return;
   for (const c of rt(room).clients) {
-    if (c.meta.role !== 'gm') {
+    // Solo cuentan la pantalla de party y los jugadores con un personaje real: un desconocido
+    // que se conecte con el código de la partida no fija el punto de inicio.
+    if (c.meta.role === 'party' || (c.meta.role === 'player' && c.meta.pc)) {
       sc.start = snapshot(sc);
       return;
     }
   }
+}
+
+const lightCache = new WeakMap(); // escena -> { segs, spec, bits: Map }
+
+function cachedLightBits(sc, L, env, sp) {
+  const key = Fog.specKey(sp);
+  let c = lightCache.get(sc);
+  if (!c || c.segs !== env.segs || c.spec !== key) lightCache.set(sc, (c = { segs: env.segs, spec: key, bits: new Map() }));
+  const id = L.x + ',' + L.y + ',' + L.r;
+  let bits = c.bits.get(id);
+  if (!bits) {
+    if (c.bits.size > 600) c.bits.clear();
+    bits = Fog.lightBits(L, env, sp);
+    c.bits.set(id, bits);
+  }
+  return bits;
+}
+
+/**
+ * Luces que hay que enviar a un jugador. Con la escena iluminada, ninguna: no las necesita.
+ * A oscuras, solo las que alumbran algo que su personaje podría ver; así la posición de una
+ * antorcha oculta tras un muro no llega a su dispositivo.
+ */
+function lightsFor(sc, env, sp, viewers, shown) {
+  if (!env.dark || !viewers.length) return [];
+  const flat = { ...env, dark: false };
+  const reach = viewers.map((v) => Fog.seenBits(v, flat, sp, null));
+  const out = [];
+  for (const L of env.lights) {
+    const bits = cachedLightBits(sc, L, env, sp);
+    if (!reach.some((b) => Fog.overlaps(b, bits))) continue;
+    out.push(L.tid && shown.has(L.tid) ? L : { x: L.x, y: L.y, r: L.r });
+  }
+  return out;
 }
 
 function updateExplored(room) {
@@ -1029,7 +1183,7 @@ function sendState(ws, room) {
   const sc = (meta.role === 'gm' && sceneById(room, meta.sceneId)) || active;
   if (meta.role === 'gm') meta.sceneId = sc.id;
 
-  const view = { t: 'state', role: meta.role, code: room.code, sceneId: sc.id, sceneName: sc.name, scene: sc.scene, partyCam: sc === active ? room.partyCam : null };
+  const view = { t: 'state', role: meta.role, code: room.code, sceneId: sc.id, scene: sc.scene, partyCam: sc === active ? room.partyCam : null };
 
   const wallsKey = sc.id + ':' + sc.wallsRev + ':' + sc.walls.length;
   const sendWalls = meta.wallsKey !== wallsKey;
@@ -1043,6 +1197,7 @@ function sendState(ws, room) {
   if (meta.role === 'gm') {
     const online = [];
     for (const c of rt(room).clients) if (c.meta.role === 'player' && c.meta.tokenId) online.push(c.meta.tokenId);
+    view.sceneName = sc.name; // el nombre de la escena puede destripar la partida: solo para el máster
     view.lights = sc.lights;
     view.tokens = sc.tokens;
     view.proposals = sc.proposals;
@@ -1073,7 +1228,7 @@ function sendState(ws, room) {
 
   view.proposals = {};
   for (const v of viewers) if (sc.proposals[v.id]) view.proposals[v.id] = sc.proposals[v.id];
-  view.lights = env.lights;
+  view.lights = lightsFor(sc, env, sp, viewers, new Set(tokens.map((t) => t.id)));
   view.viewers = viewers.map(viewerToken);
   view.tokens = tokens.map(publicToken);
   view.me = meta.role === 'player' && viewers[0] ? viewers[0].id : null;
@@ -1103,19 +1258,44 @@ function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
+/**
+ * Recalcula y reparte el estado de una partida. Las llamadas se agrupan, y una partida cuyo
+ * cálculo es caro espera en proporción a lo que tardó: así una sola partida (por descuido o
+ * a propósito) no puede acaparar el servidor y dejar sin respuesta a las demás.
+ */
 function broadcast(room) {
   const r = rt(room);
   if (r.pending) return;
   r.pending = true;
-  setImmediate(() => {
+  const run = () => {
     r.pending = false;
-    for (const ws of r.clients) sendState(ws, room);
-  });
+    const t0 = performance.now();
+    try {
+      if (r.explore) {
+        r.explore = false;
+        maybeStart(room);
+        updateExplored(room);
+        save(room);
+      }
+    } catch (e) {
+      console.error('Error al calcular lo explorado en', room.code, e);
+    }
+    for (const ws of r.clients) {
+      try {
+        sendState(ws, room);
+      } catch (e) {
+        console.error('Error al enviar el estado en', room.code, e);
+      }
+    }
+    r.notBefore = Date.now() + Math.min(10000, (performance.now() - t0) * 4);
+  };
+  const wait = (r.notBefore || 0) - Date.now();
+  if (wait > 1) setTimeout(run, wait);
+  else setImmediate(run);
 }
 
 function changed(room) {
-  maybeStart(room);
-  updateExplored(room);
+  rt(room).explore = true;
   save(room);
   broadcast(room);
 }
@@ -1143,7 +1323,8 @@ function serveFile(res, baseDir, rel, cache) {
       'Content-Length': st.size,
       'Cache-Control': cache || 'no-cache',
     });
-    fs.createReadStream(file).pipe(res);
+    // Si el archivo desaparece o falla a media lectura, se corta la respuesta en vez de caer el servidor.
+    fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
   });
 }
 
@@ -1157,6 +1338,10 @@ function lanAddresses() {
 
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
+    if (Number(req.headers['content-length']) > limit) {
+      req.resume(); // se descarta sin guardar nada en memoria
+      return reject(new Error('too large'));
+    }
     const chunks = [];
     let size = 0;
     req.on('data', (c) => {
@@ -1175,7 +1360,10 @@ function readBody(req, limit) {
 function importScene(room, data) {
   const sc = blankScene(str(data.name, 'Escena importada', 60));
   const s = sc.scene;
-  if (data.map && mapUrlOk(room, data.map.url)) s.map = data.map.url;
+  if (data.map && mapUrlOk(room, data.map.url)) {
+    s.map = data.map.url;
+    pendingMaps.delete(s.map);
+  }
   s.width = num(data.width, s.width, 50, 20000);
   s.height = num(data.height, s.height, 50, 20000);
   s.gridSize = num(data.gridSize, s.gridSize, 10, 500);
@@ -1192,20 +1380,30 @@ function importScene(room, data) {
   return sc;
 }
 
+let importing = false; // solo una restauración de copia a la vez
+
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const p = decodeURIComponent(url.pathname);
 
-  if (p === '/api/info' && req.method === 'GET') return json(res, 200, { lan: lanAddresses(), port: PORT });
+  const ip = clientIp(req);
+
+  // Las direcciones de la red local solo interesan a quien abre el servidor desde la propia máquina.
+  if (p === '/api/info' && req.method === 'GET') {
+    return json(res, 200, { lan: isLoopback(req) ? lanAddresses() : [], port: PORT, needsPassword: !!CREATE_PASSWORD });
+  }
 
   if (p === '/api/rooms' && req.method === 'POST') {
+    if (!allowed('create', ip, 60, 3600000)) return json(res, 429, { error: 'Demasiadas partidas creadas desde esta dirección. Prueba más tarde.' });
+    if (!passwordOk(req)) return json(res, 401, { error: 'Contraseña del servidor incorrecta.' });
+    if (rooms.size >= MAX_ROOMS) return json(res, 503, { error: 'El servidor ha alcanzado su máximo de partidas.' });
     const room = createRoom();
     return json(res, 200, { code: room.code, gmKey: room.gmKey });
   }
 
   // Entrar como máster desde otro dispositivo con el código de máster.
   if (p === '/api/gm-login' && req.method === 'POST') {
-    if (!loginAllowed(req.socket.remoteAddress || '')) return json(res, 429, { error: 'Demasiados intentos. Espera un minuto y vuelve a probar.' });
+    if (!allowed('login', ip, 10)) return json(res, 429, { error: 'Demasiados intentos. Espera un minuto y vuelve a probar.' });
     let body;
     try {
       body = JSON.parse((await readBody(req, 2048)).toString('utf8'));
@@ -1220,6 +1418,8 @@ async function handle(req, res) {
 
   let m = p.match(/^\/api\/rooms\/([A-Za-z0-9]{1,12})$/);
   if (m && req.method === 'GET') {
+    // Freno a quien pruebe códigos de partida al azar (varios jugadores pueden compartir dirección).
+    if (!allowed('lookup', ip, 300)) return json(res, 429, { error: 'Demasiadas consultas. Espera un minuto.' });
     const room = rooms.get(m[1].toUpperCase());
     if (!room) return json(res, 404, { error: 'No existe esa partida' });
     const brief = (t, reserve) => ({ id: t.id, name: t.name, color: t.color, taken: t.id in room.claims, reserve });
@@ -1240,15 +1440,25 @@ async function handle(req, res) {
   }
 
   if (p === '/api/import' && req.method === 'POST') {
-    let data;
+    // Restaurar carga la copia entera en memoria: se comprueba todo antes de leer un solo byte.
+    if (!allowed('create', ip, 60, 3600000)) return json(res, 429, { error: 'Demasiadas partidas creadas desde esta dirección. Prueba más tarde.' });
+    if (!passwordOk(req)) return json(res, 401, { error: 'Contraseña del servidor incorrecta.' });
+    if (rooms.size >= MAX_ROOMS) return json(res, 503, { error: 'El servidor ha alcanzado su máximo de partidas.' });
+    if (importing) return json(res, 429, { error: 'Ya se está restaurando otra copia. Prueba en unos segundos.' });
+    importing = true;
     try {
-      data = JSON.parse((await readBody(req, MAX_BACKUP_BYTES)).toString('utf8'));
-    } catch {
-      return json(res, 400, { error: 'El archivo no es una copia de seguridad de Palantir' });
+      let data;
+      try {
+        data = JSON.parse((await readBody(req, MAX_BACKUP_BYTES)).toString('utf8'));
+      } catch {
+        return json(res, 400, { error: 'El archivo no es una copia de seguridad de Palantir' });
+      }
+      const room = importRoom(data);
+      if (!room) return json(res, 400, { error: 'El archivo no es una copia de seguridad de Palantir' });
+      return json(res, 200, { code: room.code, gmKey: room.gmKey });
+    } finally {
+      importing = false;
     }
-    const room = importRoom(data);
-    if (!room) return json(res, 400, { error: 'El archivo no es una copia de seguridad de Palantir' });
-    return json(res, 200, { code: room.code, gmKey: room.gmKey });
   }
 
   m = p.match(/^\/api\/rooms\/([A-Za-z0-9]{1,12})\/(map|scenes)$/);
@@ -1266,8 +1476,13 @@ async function handle(req, res) {
       } catch {
         return json(res, 413, { error: 'El mapa es demasiado grande (máx. 60 MB)' });
       }
+      if (imageKind(body) !== ext) return json(res, 415, { error: 'El archivo no es una imagen PNG, JPG o WebP válida.' });
+      let pending = 0;
+      for (const pm of pendingMaps.values()) if (pm.code === room.code) pending++;
+      if (pending >= MAX_PENDING_MAPS) return json(res, 429, { error: 'Hay demasiados mapas subidos sin usar. Espera unos minutos.' });
       const name = `${room.code}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
       await fs.promises.writeFile(path.join(MAPS_DIR, name), body);
+      pendingMaps.set('/maps/' + name, { code: room.code, at: Date.now() });
       return json(res, 200, { url: '/maps/' + name });
     }
 
@@ -1285,8 +1500,9 @@ async function handle(req, res) {
   }
 
   if (p === '/qr.svg' && req.method === 'GET') {
-    const text = (url.searchParams.get('text') || '').slice(0, 500);
-    if (!text) return json(res, 400, { error: 'text requerido' });
+    // Solo se generan QR de enlaces para unirse a una partida, no de textos arbitrarios.
+    const text = url.searchParams.get('text') || '';
+    if (!/^https?:\/\/[A-Za-z0-9.:[\]-]{1,255}\/\?room=[A-Za-z0-9]{1,12}$/.test(text)) return json(res, 400, { error: 'Solo se generan códigos QR de enlaces de partida.' });
     const svg = await QRCode.toString(text, { type: 'svg', margin: 1 });
     res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' });
     return res.end(svg);
@@ -1298,7 +1514,20 @@ async function handle(req, res) {
   return serveFile(res, PUBLIC_DIR, p === '/' ? 'index.html' : p.slice(1));
 }
 
+/** Cabeceras de seguridad comunes a todas las respuestas. */
+function securityHeaders(req, res) {
+  const host = /^[A-Za-z0-9.:[\]-]{1,255}$/.test(req.headers.host || '') ? req.headers.host : '';
+  const sockets = host ? ` ws://${host} wss://${host}` : '';
+  res.setHeader('Content-Security-Policy',
+    `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'${sockets}; ` +
+    "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+}
+
 const server = http.createServer((req, res) => {
+  securityHeaders(req, res);
   handle(req, res).catch((e) => {
     console.error(e);
     if (!res.headersSent) json(res, 500, { error: 'error interno' });
@@ -1308,92 +1537,133 @@ const server = http.createServer((req, res) => {
 
 /* ---------- WebSocket ---------- */
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 256 * 1024 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 128 * 1024 });
+wss.on('error', (e) => console.error('Error del servidor WebSocket:', e.message));
 
-wss.on('connection', (ws) => {
+const connsByIp = new Map(); // ip -> conexiones abiertas
+
+// Mensajes por conexión: ráfagas de hasta 200 y 80 por segundo sostenidos. Lo normal (arrastrar
+// un deslizador, pasar turnos) queda muy por debajo; una inundación se descarta sin procesar.
+const MSG_BURST = 200, MSG_PER_SECOND = 80;
+
+/** Rechaza un saludo y, si la misma dirección acumula muchos rechazos, corta la conexión. */
+function refuse(ws, code, msg) {
+  send(ws, { t: 'error', code, msg });
+  if (!allowed('hello-fail', ws.ip, 40)) ws.close();
+}
+
+function onHello(ws, m) {
+  if (ws.meta) return;
+  const room = rooms.get(String(m.room || '').toUpperCase());
+  if (!room) return refuse(ws, 'no-room', 'No existe esa partida');
+  const role = m.role === 'gm' ? 'gm' : m.role === 'party' ? 'party' : 'player';
+  if (role === 'gm' && m.key !== room.gmKey) return refuse(ws, 'bad-key', 'Clave de máster incorrecta');
+  if (role === 'party' && m.key !== room.partyKey) return refuse(ws, 'bad-key', 'La pantalla de party se abre con el enlace que tiene el máster.');
+  // Un identificador de ficha siempre tiene el mismo formato; cualquier otra cosa se ignora.
+  const tokenId = role === 'player' && typeof m.tokenId === 'string' && ID_RE.test(m.tokenId) ? m.tokenId : null;
+  const pc = role === 'player' && !!tokenId && isPcAnywhere(room, tokenId);
+  if (pc) {
+    // Cada personaje queda ligado al primer dispositivo que lo abre.
+    const owner = room.claims[tokenId];
+    if (owner && owner !== m.secret) return refuse(ws, 'taken', 'Este personaje ya lo lleva otro dispositivo. Si es el tuyo, pide al máster que lo libere.');
+    if (!owner) {
+      room.claims[tokenId] = newSecret();
+      send(ws, { t: 'claim', tokenId, secret: room.claims[tokenId] });
+    }
+  }
+  clearTimeout(ws.helloTimer);
+  ws.meta = { code: room.code, role, tokenId, pc, sceneId: null, wallsKey: null, fogKey: null };
+  rt(room).clients.add(ws);
+  if (pc || role === 'party') changed(room); // la entrada de un jugador puede dar comienzo a la escena
+  else broadcast(room);
+}
+
+function onMessage(ws, data) {
+  let m;
+  try {
+    m = JSON.parse(data);
+  } catch {
+    return;
+  }
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return;
+  if (m.t === 'hello') return onHello(ws, m);
+
+  if (!ws.meta) return;
+  const room = rooms.get(ws.meta.code);
+  if (!room) return;
+
+  if (ws.meta.role === 'gm') {
+    if (m.t === 'op') gmOp(room, ws, m);
+    else if (m.t === 'cam') {
+      // El encuadre solo se comparte si el máster está viendo la escena en la que están los jugadores.
+      if (ws.meta.sceneId && ws.meta.sceneId !== activeScene(room).id) return;
+      const r = m.rect;
+      room.partyCam = r && typeof r === 'object'
+        ? { x: num(r.x, 0, -COORD, COORD), y: num(r.y, 0, -COORD, COORD), w: num(r.w, 1000, 10, COORD), h: num(r.h, 1000, 10, COORD) }
+        : null;
+      save(room);
+      for (const c of rt(room).clients) if (c.meta.role === 'party') send(c, { t: 'cam', rect: room.partyCam });
+    }
+    return;
+  }
+
+  if (ws.meta.role === 'player') {
+    const sc = activeScene(room);
+    const t = sc.tokens.find((x) => x.id === ws.meta.tokenId && x.kind === 'pc');
+    if (!t) return;
+    if (m.t === 'propose') {
+      const c = clampMove(sc, t, num(m.x, t.x, -COORD, COORD), num(m.y, t.y, -COORD, COORD));
+      const moved = Math.hypot(c.x - t.x, c.y - t.y) >= 2;
+      if (moved) sc.proposals[t.id] = { x: c.x, y: c.y };
+      if (c.why === 'spent') send(ws, { t: 'notice', msg: 'No te queda movimiento este turno.' });
+      else if (c.why === 'wall' && !moved) send(ws, { t: 'notice', msg: 'No puedes avanzar por ahí: hay un muro.' });
+      else if (c.why === 'wall') send(ws, { t: 'notice', msg: 'Hay un muro en medio: llegas hasta él.' });
+      if (moved) changed(room);
+    } else if (m.t === 'cancel') {
+      delete sc.proposals[t.id];
+      changed(room);
+    } else if (m.t === 'face') {
+      t.facing = num(m.angle, t.facing, -10, 10);
+      changed(room);
+    }
+  }
+}
+
+wss.on('connection', (ws, req) => {
   ws.meta = null;
   ws.alive = true;
+  ws.ip = clientIp(req);
+  ws.tokens = MSG_BURST;
+  ws.refilled = Date.now();
+  // Sin este manejador, una trama inválida o demasiado grande tiraría el proceso entero.
+  ws.on('error', () => ws.terminate());
   ws.on('pong', () => (ws.alive = true));
 
+  const open = (connsByIp.get(ws.ip) || 0) + 1;
+  connsByIp.set(ws.ip, open);
+  if (open > MAX_CONNECTIONS_PER_IP || wss.clients.size > MAX_CONNECTIONS) ws.close(1013, 'demasiadas conexiones');
+  // Quien conecta y no se identifica en 10 segundos, fuera.
+  ws.helloTimer = setTimeout(() => { if (!ws.meta) ws.terminate(); }, 10000);
+
   ws.on('message', (data) => {
-    let m;
+    const now = Date.now();
+    ws.tokens = Math.min(MSG_BURST, ws.tokens + ((now - ws.refilled) / 1000) * MSG_PER_SECOND);
+    ws.refilled = now;
+    if (ws.tokens < 1) return; // inundación de mensajes: se descartan
+    ws.tokens -= 1;
     try {
-      m = JSON.parse(data);
-    } catch {
-      return;
-    }
-    if (!m || typeof m !== 'object') return;
-
-    if (m.t === 'hello') {
-      if (ws.meta) return;
-      const room = rooms.get(String(m.room || '').toUpperCase());
-      if (!room) return send(ws, { t: 'error', code: 'no-room', msg: 'No existe esa partida' });
-      const role = m.role === 'gm' ? 'gm' : m.role === 'party' ? 'party' : 'player';
-      if (role === 'gm' && m.key !== room.gmKey) return send(ws, { t: 'error', code: 'bad-key', msg: 'Clave de máster incorrecta' });
-      if (role === 'party' && m.key !== room.partyKey) {
-        return send(ws, { t: 'error', code: 'bad-key', msg: 'La pantalla de party se abre con el enlace que tiene el máster.' });
-      }
-      const tokenId = role === 'player' ? String(m.tokenId || '') : null;
-      if (role === 'player' && isPcAnywhere(room, tokenId)) {
-        // Cada personaje queda ligado al primer dispositivo que lo abre.
-        const owner = room.claims[tokenId];
-        if (owner && owner !== m.secret) {
-          return send(ws, { t: 'error', code: 'taken', msg: 'Este personaje ya lo lleva otro dispositivo. Si es el tuyo, pide al máster que lo libere.' });
-        }
-        if (!owner) {
-          room.claims[tokenId] = newSecret();
-          send(ws, { t: 'claim', tokenId, secret: room.claims[tokenId] });
-        }
-      }
-      ws.meta = { code: room.code, role, tokenId, sceneId: null, wallsKey: null, fogKey: null };
-      rt(room).clients.add(ws);
-      if (role === 'gm') broadcast(room);
-      else changed(room); // la entrada de un jugador puede dar comienzo a la escena
-      return;
-    }
-
-    if (!ws.meta) return;
-    const room = rooms.get(ws.meta.code);
-    if (!room) return;
-
-    if (ws.meta.role === 'gm') {
-      if (m.t === 'op') gmOp(room, ws, m);
-      else if (m.t === 'cam') {
-        // El encuadre solo se comparte si el máster está viendo la escena en la que están los jugadores.
-        if (ws.meta.sceneId && ws.meta.sceneId !== activeScene(room).id) return;
-        const r = m.rect;
-        room.partyCam = r && typeof r === 'object'
-          ? { x: num(r.x, 0, -COORD, COORD), y: num(r.y, 0, -COORD, COORD), w: num(r.w, 1000, 10, COORD), h: num(r.h, 1000, 10, COORD) }
-          : null;
-        save(room);
-        for (const c of rt(room).clients) if (c.meta.role === 'party') send(c, { t: 'cam', rect: room.partyCam });
-      }
-      return;
-    }
-
-    if (ws.meta.role === 'player') {
-      const sc = activeScene(room);
-      const t = sc.tokens.find((x) => x.id === ws.meta.tokenId && x.kind === 'pc');
-      if (!t) return;
-      if (m.t === 'propose') {
-        const c = clampMove(sc, t, num(m.x, t.x, -COORD, COORD), num(m.y, t.y, -COORD, COORD));
-        const moved = Math.hypot(c.x - t.x, c.y - t.y) >= 2;
-        if (moved) sc.proposals[t.id] = { x: c.x, y: c.y };
-        if (c.why === 'spent') send(ws, { t: 'notice', msg: 'No te queda movimiento este turno.' });
-        else if (c.why === 'wall' && !moved) send(ws, { t: 'notice', msg: 'No puedes avanzar por ahí: hay un muro.' });
-        else if (c.why === 'wall') send(ws, { t: 'notice', msg: 'Hay un muro en medio: llegas hasta él.' });
-        if (moved) changed(room);
-      } else if (m.t === 'cancel') {
-        delete sc.proposals[t.id];
-        changed(room);
-      } else if (m.t === 'face') {
-        t.facing = num(m.angle, t.facing, -10, 10);
-        changed(room);
-      }
+      onMessage(ws, data);
+    } catch (e) {
+      // Un mensaje que provoque un error nunca debe llevarse por delante el servidor.
+      console.error('Error al procesar un mensaje:', e);
     }
   });
 
   ws.on('close', () => {
+    clearTimeout(ws.helloTimer);
+    const left = (connsByIp.get(ws.ip) || 1) - 1;
+    if (left > 0) connsByIp.set(ws.ip, left);
+    else connsByIp.delete(ws.ip);
     if (!ws.meta) return;
     const room = rooms.get(ws.meta.code);
     if (!room) return;
@@ -1420,7 +1690,18 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   });
 }
 
+// Último recurso: si aun así algo escapa, se guardan las partidas antes de salir para que el
+// reinicio automático no pierda nada.
+process.on('uncaughtException', (e) => {
+  console.error('Error no controlado; se guardan las partidas y se reinicia:', e);
+  try {
+    flushSync();
+  } catch { /* nada más que hacer */ }
+  process.exit(1);
+});
+
 loadRooms();
+sweepOrphanMaps();
 server.listen(PORT, () => {
   console.log(`Palantir escuchando en http://localhost:${PORT}`);
   for (const ip of lanAddresses()) console.log(`  En tu red local: http://${ip}:${PORT}`);

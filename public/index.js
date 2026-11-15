@@ -40,11 +40,25 @@
     if (e.key === 'Enter') loadRoom($('code').value);
   });
 
+  // Si el servidor pide contraseña para crear partidas, se muestra el campo.
+  fetch('/api/info').then((r) => r.json()).then((info) => {
+    if (info.needsPassword) $('createPwBox').classList.remove('hidden');
+  }).catch(() => {});
+  const createHeaders = () => ({ 'X-Create-Password': encodeURIComponent($('createPw').value) });
+
   $('create').onclick = async () => {
-    const res = await fetch('/api/rooms', { method: 'POST' });
-    const data = await res.json();
-    localStorage.setItem(GM_PREFIX + data.code, data.gmKey);
-    location.href = '/gm.html?room=' + data.code + '&nueva=1';
+    const msg = $('createMsg');
+    try {
+      const res = await fetch('/api/rooms', { method: 'POST', headers: createHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo crear la partida');
+      localStorage.setItem(GM_PREFIX + data.code, data.gmKey);
+      location.href = '/gm.html?room=' + data.code + '&nueva=1';
+    } catch (err) {
+      $('createPwBox').classList.remove('hidden');
+      msg.textContent = err.message;
+      msg.classList.remove('hidden');
+    }
   };
 
   // Entrar como máster en una partida creada en otro dispositivo.
@@ -81,7 +95,7 @@
     if (!file) return;
     $('restoreMsg').textContent = 'Restaurando…';
     try {
-      const res = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: file });
+      const res = await fetch('/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json', ...createHeaders() }, body: file });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'No se pudo restaurar');
       localStorage.setItem(GM_PREFIX + data.code, data.gmKey);

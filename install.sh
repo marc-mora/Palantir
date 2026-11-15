@@ -11,6 +11,7 @@
 #
 #   ./install.sh               instalar o actualizar el servicio
 #   PORT=8080 ./install.sh     elegir puerto (por defecto 80 si está libre; si no, 3000)
+#   CREATE_PASSWORD=... ./install.sh   fijar la contraseña para crear partidas (si no, se genera una)
 #   ./install.sh --local       solo instalar dependencias en esta carpeta (para «npm start»)
 #   ./install.sh --uninstall   quitar el servicio (las partidas no se borran)
 
@@ -53,7 +54,7 @@ fi
 if [ "$MODE" != local ] && [ "$(id -u)" -ne 0 ]; then
   have sudo || die "Hace falta ser root. Entra como root o instala sudo."
   say "Se necesitan permisos de administrador; te pedirá la contraseña de sudo."
-  exec sudo --preserve-env=PORT,APP_DIR,DATA_DIR,NODE_DIR,ENV_FILE,UNIT_FILE,SERVICE_USER,FORCE_SERVICE bash "$0" "$@"
+  exec sudo --preserve-env=PORT,CREATE_PASSWORD,TRUST_PROXY,APP_DIR,DATA_DIR,NODE_DIR,ENV_FILE,UNIT_FILE,SERVICE_USER,FORCE_SERVICE bash "$0" "$@"
 fi
 
 # ---------------------------------------------------------------- utilidades
@@ -234,12 +235,42 @@ chmod -R a+rX "$APP_DIR"
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
 
-cat > "$ENV_FILE" <<EOF
+# Contraseña para crear o restaurar partidas: sin ella, cualquiera que encuentre el servidor en
+# internet podría llenarlo de partidas. Se usa la indicada; si no, la de la instalación anterior;
+# y si no hay ninguna, se genera una al azar.
+OLD_PASS=""; OLD_PROXY=""
+if [ -f "$ENV_FILE" ]; then
+  OLD_PASS="$(sed -n 's/^CREATE_PASSWORD=//p' "$ENV_FILE" | head -n1)"
+  OLD_PROXY="$(sed -n 's/^TRUST_PROXY=//p' "$ENV_FILE" | head -n1)"
+fi
+NEW_PASS=0
+if [ -n "${CREATE_PASSWORD:-}" ]; then PASS="$CREATE_PASSWORD"
+elif [ -n "$OLD_PASS" ]; then PASS="$OLD_PASS"
+else
+  PASS="$("$NODE_BIN" -e 'console.log(require("crypto").randomBytes(8).toString("hex").match(/.{4}/g).join("-"))')"
+  NEW_PASS=1
+fi
+# Solo caracteres que no necesitan comillas en el archivo de configuración.
+if ! printf '%s' "$PASS" | grep -Eq '^[A-Za-z0-9._@%+=:,-]{8,64}$'; then
+  die "La contraseña debe tener entre 8 y 64 caracteres: letras, cifras o . _ @ % + = : , -"
+fi
+TRUST_PROXY="${TRUST_PROXY:-${OLD_PROXY:-0}}"
+
+# El archivo guarda la contraseña: solo root puede leerlo (systemd lo lee como root).
+(
+  umask 077
+  cat > "$ENV_FILE" <<EOF
 # Configuración de Palantir. Tras cambiarla: systemctl restart palantir
 PORT=$PORT
 DATA_DIR=$DATA_DIR
 NODE_ENV=production
+# Contraseña que se pide para crear o restaurar partidas.
+CREATE_PASSWORD=$PASS
+# Pon 1 solo si delante hay un proxy inverso (Caddy, nginx) que añade X-Forwarded-For.
+TRUST_PROXY=$TRUST_PROXY
 EOF
+)
+chmod 600 "$ENV_FILE"
 
 cat > "$UNIT_FILE" <<EOF
 [Unit]
@@ -255,6 +286,7 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$NODE_BIN server.js
 Restart=on-failure
 RestartSec=2
+LimitNOFILE=16384
 # Permite escuchar en el puerto 80 sin ser root, y nada más.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -303,6 +335,10 @@ echo
 ok "Palantir está en marcha$([ "$WAS_RUNNING" = 1 ] && echo ' (actualizado)')."
 echo
 echo "    Ábrelo en:  http://$(my_ip)$SUFFIX"
+echo
+echo "    Contraseña para crear partidas:  $PASS$([ "$NEW_PASS" = 1 ] && echo '   (recién generada: apúntala)')"
+echo "    Se pide al crear o restaurar una partida, no para continuar las que ya existen."
+echo "    Para cambiarla:  CREATE_PASSWORD=la-nueva ./install.sh"
 echo
 echo "    Partidas y mapas:  $DATA_DIR"
 echo "    Ver el registro:   journalctl -u palantir -f"
